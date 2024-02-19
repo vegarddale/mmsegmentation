@@ -32,7 +32,7 @@ class DCNv3KA(BaseModule):
                  center_feature_scale=False): 
         super().__init__()
         self.channels = channels
-        self.core_op = getattr(dcnv3, 'DCNv3_pytorch')
+        self.core_op = getattr(dcnv3, 'DCNv3')
         self.output_proj = nn.Linear(channels, channels)
         self.dw_dcn = self.core_op(
             channels=channels,
@@ -51,8 +51,8 @@ class DCNv3KA(BaseModule):
             channels=channels,
             kernel_size=7,
             stride=1,
-            pad=9,
-            dilation=3,
+            pad=3,
+            dilation=1,
             group=channels,
             offset_scale=offset_scale,
             act_layer=act_layer,
