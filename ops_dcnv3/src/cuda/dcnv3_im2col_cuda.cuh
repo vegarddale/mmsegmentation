@@ -34,7 +34,7 @@ __device__ opmath_t dcnv3_im2col_bilinear(const scalar_t *&bottom_data,
                                           const int &height, const int &width,
                                           const int &group,
                                           const int &group_channels,
-                                          const opmath_t &h, const opmath_t &w,
+                                          const opmath_t &h, const opmath_t &w, // loc_h, loc_w
                                           const int &g, const int &c) {
     const int h_low = floor(h);
     const int w_low = floor(w);
@@ -234,6 +234,7 @@ __global__ void dcnv3_im2col_gpu_kernel(
         _temp /= width_out;
         const int p0_h = ((dilation_h * (kernel_h - 1)) >> 1) - pad_h +
                          (_temp % height_out) * stride_h;
+        // p0_w, p0_h = top left corner of filter
         _temp /= height_out;
         const int b_col = _temp;
 
@@ -255,7 +256,7 @@ __global__ void dcnv3_im2col_gpu_kernel(
                 const opmath_t offset_w = data_offset[data_loc_w_ptr];
                 const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
-                    p0_w_ + (i * dilation_w + offset_w) * offset_scale;
+                    p0_w_ + (i * dilation_w + offset_w) * offset_scale; 
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
                 const opmath_t weight = data_mask[data_weight_ptr];
@@ -321,8 +322,8 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                const opmath_t offset_w = data_offset[data_loc_w_ptr]; // sett til 0 basert på hvilken vei strip conv går
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1]; // sett til 0 basert på hvilken vei strip conv går
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =

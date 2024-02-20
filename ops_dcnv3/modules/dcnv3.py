@@ -91,8 +91,7 @@ class CenterFeatureScaleModule(nn.Module):
                                         bias=center_feature_scale_proj_bias).sigmoid()
         return center_feature_scale
 
-# This is the original implementation from InternImage
-# Cannot import after rename
+
 class Original_DCNv3_pytorch(nn.Module):
     def __init__(
             self,
@@ -335,7 +334,158 @@ class DCNv3_pytorch(nn.Module):
             x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
         return x
 
+
 class DCNv3(nn.Module):
+    def __init__(
+            self,
+            channels=64,
+            kernel_size=3,
+            dw_kernel_size=None,
+            stride=1,
+            pad=1,
+            dilation=1,
+            group=4,
+            offset_scale=1.0,
+            act_layer='GELU',
+            norm_layer='LN',
+            center_feature_scale=False,
+            use_dcn_v4_op=False,
+            ):
+        """
+        DCNv3 Module
+        :param channels
+        :param kernel_size
+        :param stride
+        :param pad
+        :param dilation
+        :param group
+        :param offset_scale
+        :param act_layer
+        :param norm_layer
+        """
+        super().__init__()
+        if channels % group != 0:
+            raise ValueError(
+                f'channels must be divisible by group, but got {channels} and {group}')
+        _d_per_group = channels // group
+        dw_kernel_size = dw_kernel_size if dw_kernel_size is not None else kernel_size
+        # you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation
+        if not _is_power_of_2(_d_per_group):
+            warnings.warn(
+                "You'd better set channels in DCNv3 to make the dimension of each attention head a power of 2 "
+                "which is more efficient in our CUDA implementation.")
+        
+        self.channels = channels
+        self.kernel_size = kernel_size
+        self.dw_kernel_size = dw_kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        self.pad = pad
+        self.group = group
+        self.group_channels = channels // group
+        self.offset_scale = offset_scale
+        self.center_feature_scale = center_feature_scale
+         
+        self.use_dcn_v4_op = use_dcn_v4_op
+
+        self.dw_conv = nn.Sequential(
+            nn.Conv2d(
+                channels,
+                channels,
+                kernel_size=dw_kernel_size,
+                stride=1,
+                padding=(dw_kernel_size - 1) // 2,
+                groups=channels),
+            build_norm_layer(
+                channels,
+                norm_layer,
+                'channels_first',
+                'channels_last'),
+            build_act_layer(act_layer))
+        self.offset = nn.Linear(
+            channels,
+            group * kernel_size * kernel_size * 2)
+        self.mask = nn.Linear(
+            channels,
+            group * kernel_size * kernel_size)
+        self.input_proj = nn.Linear(channels, channels)
+        self._reset_parameters()
+        
+        if center_feature_scale:
+            self.center_feature_scale_proj_weight = nn.Parameter(
+                torch.zeros((group, channels), dtype=torch.float))
+            self.center_feature_scale_proj_bias = nn.Parameter(
+                torch.tensor(0.0, dtype=torch.float).view((1,)).repeat(group, ))
+            self.center_feature_scale_module = CenterFeatureScaleModule()
+
+    def _reset_parameters(self):
+        constant_(self.offset.weight.data, 0.)
+        constant_(self.offset.bias.data, 0.)
+        constant_(self.mask.weight.data, 0.)
+        constant_(self.mask.bias.data, 0.)
+
+    def forward(self, input):
+        """
+        :param query                       (N, H, W, C)
+        :return output                     (N, H, W, C)
+        """
+        N, H, W, _ = input.shape
+        dtype = input.dtype
+        x1 = input.permute(0, 3, 1, 2)
+        x1 = self.dw_conv(x1)
+        offset = self.offset(x1)
+        mask = self.mask(x1).reshape(N, H, W, self.group, -1)
+
+        if not self.use_dcn_v4_op:
+            mask = F.softmax(mask, -1).reshape(N, H, W, -1).type(dtype)
+            x = DCNv3Function.apply(
+                input, offset, mask,
+                self.kernel_size, self.kernel_size,
+                self.stride, self.stride,
+                self.pad, self.pad,
+                self.dilation, self.dilation,
+                self.group, self.group_channels,
+                self.offset_scale,
+                256)
+        else:
+            # DCNv4 combines offset and weight mask into one tensor `offset_mask`.
+            # The following code is to align DCNv3 and DCNv4
+            offset = offset.view(N, H, W, self.group, -1)
+            mask = F.softmax(mask, -1)
+            mask = mask.view(N, H, W, self.group, -1)
+            offset_mask = torch.cat([offset, mask], -1).view(N, H, W, -1).contiguous()
+
+            # For efficiency, the last dimension of the offset_mask tensor in dcnv4 is a multiple of 8. 
+            K3 = offset_mask.size(-1)
+            K3_pad = int(math.ceil(K3/8)*8)
+            pad_dim = K3_pad - K3
+            offset_mask = torch.cat([offset_mask, offset_mask.new_zeros([*offset_mask.size()[:3], pad_dim])], -1)
+        
+            x = DCNv4Function.apply(
+                input, offset_mask,
+                self.kernel_size, self.kernel_size,
+                self.stride, self.stride,
+                self.pad, self.pad,
+                self.dilation, self.dilation,
+                self.group, self.group_channels,
+                self.offset_scale,
+                256,
+                False
+            )
+
+        if self.center_feature_scale:
+            center_feature_scale = self.center_feature_scale_module(
+                x1, self.center_feature_scale_proj_weight, self.center_feature_scale_proj_bias)
+            # N, H, W, groups -> N, H, W, groups, 1 -> N, H, W, groups, _d_per_group -> N, H, W, channels
+            center_feature_scale = center_feature_scale[..., None].repeat(
+                1, 1, 1, 1, self.channels // self.group).flatten(-2)
+            x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
+
+        return x
+
+# This is the original implementation from InternImage
+# Renamed due to import issues
+class Original_DCNv3(nn.Module):
     def __init__(
             self,
             channels=64,
@@ -388,7 +538,6 @@ class DCNv3(nn.Module):
         self.center_feature_scale = center_feature_scale
          
         self.use_dcn_v4_op = use_dcn_v4_op
-
         self.dw_conv = nn.Sequential(
             nn.Conv2d(
                 channels,
