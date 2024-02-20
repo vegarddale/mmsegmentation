@@ -4,12 +4,23 @@
 
 # model settings
 norm_cfg = dict(type='SyncBN', requires_grad=True)
+data_preprocessor = dict(
+    type='SegDataPreProcessor',
+    mean=[123.675, 116.28, 103.53],
+    std=[58.395, 57.12, 57.375],
+    bgr_to_rgb=True,
+    pad_val=0,
+    seg_pad_val=255,
+    size=(512, 512),
+    test_cfg=dict(size_divisor=32))
 model = dict(
     type='EncoderDecoder',
+    data_preprocessor=data_preprocessor,
     pretrained=None,
     backbone=dict(
         type='VAN',
         embed_dims=[32, 64, 160, 256],
+        mlp_ratios=[8, 8, 4, 4],
         drop_rate=0.0,
         drop_path_rate=0.1,
         depths=[3, 3, 5, 2],

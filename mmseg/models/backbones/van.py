@@ -5,14 +5,14 @@
 import torch
 import torch.nn as nn
 
-from timm.models.layers import DropPath
-from mmcv.cnn.utils.weight_init import (constant_init, normal_init,
+from mmcv.cnn.bricks import DropPath
+from mmengine.model.weight_init import (constant_init, normal_init,
                                         trunc_normal_init)
 from torch.nn.modules.utils import _pair as to_2tuple
 from mmseg.models.builder import BACKBONES
 
 from mmcv.cnn import build_norm_layer
-from mmcv.runner import BaseModule
+from mmengine.model import BaseModule
 import math
 import warnings
 
