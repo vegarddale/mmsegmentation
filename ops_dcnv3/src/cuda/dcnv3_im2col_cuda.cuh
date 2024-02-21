@@ -83,7 +83,7 @@ template <typename scalar_t>
 __device__ void dcnv3_col2im_bilinear(
     const scalar_t *&bottom_data, const int &height, const int &width,
     const int &nheads, const int &group_channels, const opmath_t &h,
-    const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale,
+    const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale, const int strip_conv,
     const opmath_t &top_grad, const opmath_t &mask, opmath_t *&grad_im,
     opmath_t *grad_offset, opmath_t *grad_mask) {
     const int h_low = floor(h);
@@ -150,7 +150,7 @@ template <typename scalar_t>
 __device__ void dcnv3_col2im_bilinear_gm(
     const scalar_t *&bottom_data, const int &height, const int &width,
     const int &nheads, const int &group_channels, const opmath_t &h,
-    const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale,
+    const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale, const int strip_conv,
     const opmath_t &top_grad, const opmath_t &mask, opmath_t *&grad_im,
     opmath_t *grad_offset, opmath_t *grad_mask) {
     const int h_low = floor(h);
@@ -221,7 +221,7 @@ __global__ void dcnv3_im2col_gpu_kernel(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale) {
+    const opmath_t offset_scale, const int strip_conv) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -251,10 +251,21 @@ __global__ void dcnv3_im2col_gpu_kernel(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale; 
                 const opmath_t loc_h =
@@ -284,7 +295,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         __shared__ opmath_t cache_grad_offset[blockSize * 2];
@@ -320,10 +331,21 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr]; // sett til 0 basert på hvilken vei strip conv går
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1]; // sett til 0 basert på hvilken vei strip conv går
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -336,7 +358,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr,
                         cache_grad_offset + (threadIdx.x << 1),
                         cache_grad_mask + threadIdx.x);
@@ -378,7 +400,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         __shared__ opmath_t cache_grad_offset[blockSize * 2];
@@ -414,10 +436,22 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
+
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -430,7 +464,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr,
                         cache_grad_offset + (threadIdx.x << 1),
                         cache_grad_mask + threadIdx.x);
@@ -474,7 +508,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         extern __shared__ int _s[];
@@ -511,10 +545,22 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
+
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -527,7 +573,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr,
                         cache_grad_offset + (threadIdx.x << 1),
                         cache_grad_mask + threadIdx.x);
@@ -569,7 +615,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         extern __shared__ int _s[];
@@ -606,10 +652,22 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
+
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -622,7 +680,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr,
                         cache_grad_offset + (threadIdx.x << 1),
                         cache_grad_mask + threadIdx.x);
@@ -675,7 +733,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         extern __shared__ int _s[];
@@ -712,10 +770,22 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
+
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -728,7 +798,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr,
                         cache_grad_offset + (threadIdx.x << 1),
                         cache_grad_mask + threadIdx.x);
@@ -781,7 +851,7 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
+    const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im, opmath_t *grad_offset,
     opmath_t *grad_mask) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         int _temp = index;
@@ -814,10 +884,22 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        opmath_t offset_w, offset_h;
+
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_loc_w_ptr];
-                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                if (strip_conv == 1) {
+                    if (kernel_w == 1) {
+                        offset_w = data_offset[data_loc_w_ptr];
+                        offset_h = 0;
+                    } else {
+                        offset_w = 0;
+                        offset_h = data_offset[data_loc_w_ptr];
+                    }
+                } else {
+                    offset_w = data_offset[data_loc_w_ptr];
+                    offset_h = data_offset[data_loc_w_ptr + 1];
+                }
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
@@ -827,7 +909,7 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear_gm(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
+                        loc_h, loc_w, g_col, c_col, offset_scale, strip_conv, top_grad,
                         weight, grad_im_ptr, grad_offset, grad_mask);
                 }
                 data_weight_ptr += 1;
@@ -849,7 +931,7 @@ void dcnv3_im2col_cuda(cudaStream_t stream, const scalar_t *data_im,
                        const int group, const int group_channels,
                        const int batch_n, const int height_in,
                        const int width_in, const int height_out,
-                       const int width_out, const opmath_t offset_scale) {
+                       const int width_out, const opmath_t offset_scale, const int strip_conv) {
     const int num_kernels =
         batch_n * height_out * width_out * group * group_channels;
     const int num_actual_kernels =
@@ -860,7 +942,7 @@ void dcnv3_im2col_cuda(cudaStream_t stream, const scalar_t *data_im,
            stream>>>(num_kernels, data_im, data_offset, data_mask, data_col,
                      kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                      dilation_h, dilation_w, group, group_channels, height_in,
-                     width_in, height_out, width_out, offset_scale);
+                     width_in, height_out, width_out, offset_scale, strip_conv);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -876,7 +958,7 @@ void dcnv3_col2im_cuda(
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int batch_n,
     const int height_in, const int width_in, const int height_out,
-    const int width_out, const opmath_t offset_scale, opmath_t *grad_im,
+    const int width_out, const opmath_t offset_scale, const int strip_conv, opmath_t *grad_im,
     opmath_t *grad_offset, opmath_t *grad_mask) {
     const int num_threads =
         (group_channels > CUDA_NUM_THREADS) ? CUDA_NUM_THREADS : group_channels;
@@ -892,7 +974,7 @@ void dcnv3_col2im_cuda(
                     num_kernels, grad_col, data_im, data_offset, data_mask,
                     kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                     dilation_h, dilation_w, group, group_channels, height_in,
-                    width_in, height_out, width_out, offset_scale, grad_im,
+                    width_in, height_out, width_out, offset_scale, strip_conv, grad_im,
                     grad_offset, grad_mask);
         } else {
             dcnv3_col2im_gpu_kernel_gm<scalar_t>
@@ -901,7 +983,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
         }
     } else {
@@ -913,7 +995,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 2:
@@ -923,7 +1005,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 4:
@@ -933,7 +1015,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 8:
@@ -943,7 +1025,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 16:
@@ -953,7 +1035,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 32:
@@ -963,7 +1045,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 64:
@@ -973,7 +1055,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 128:
@@ -983,7 +1065,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 256:
@@ -993,7 +1075,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 512:
@@ -1003,7 +1085,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         case 1024:
@@ -1014,7 +1096,7 @@ void dcnv3_col2im_cuda(
                              data_mask, kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
+                             width_out, offset_scale, strip_conv, grad_im, grad_offset,
                              grad_mask);
             break;
         default:
@@ -1026,7 +1108,7 @@ void dcnv3_col2im_cuda(
                         kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                         dilation_h, dilation_w, group, group_channels,
                         height_in, width_in, height_out, width_out,
-                        offset_scale, grad_im, grad_offset, grad_mask);
+                        offset_scale, strip_conv, grad_im, grad_offset, grad_mask);
             } else {
                 dcnv3_col2im_gpu_kernel_shm_reduce_v2<scalar_t>
                     <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads,
@@ -1035,7 +1117,7 @@ void dcnv3_col2im_cuda(
                         kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                         dilation_h, dilation_w, group, group_channels,
                         height_in, width_in, height_out, width_out,
-                        offset_scale, grad_im, grad_offset, grad_mask);
+                        offset_scale, strip_conv, grad_im, grad_offset, grad_mask);
             }
         }
     }

@@ -350,6 +350,7 @@ class DCNv3(nn.Module):
             norm_layer='LN',
             center_feature_scale=False,
             use_dcn_v4_op=False,
+            strip_conv=False
             ):
         """
         DCNv3 Module
@@ -402,9 +403,15 @@ class DCNv3(nn.Module):
                 'channels_first',
                 'channels_last'),
             build_act_layer(act_layer))
-        self.offset = nn.Linear(
+        self.strip_conv = strip_conv
+        if self.strip_conv:
+            self.offset = nn.Linear(
             channels,
-            group * kernel_size * kernel_size * 2)
+            group * kernel_size * kernel_size)
+        else:
+            self.offset = nn.Linear(
+                channels,
+                group * kernel_size * kernel_size * 2)
         self.mask = nn.Linear(
             channels,
             group * kernel_size * kernel_size)
@@ -446,6 +453,7 @@ class DCNv3(nn.Module):
                 self.dilation, self.dilation,
                 self.group, self.group_channels,
                 self.offset_scale,
+                self.strip_conv,
                 256)
         else:
             # DCNv4 combines offset and weight mask into one tensor `offset_mask`.
@@ -482,6 +490,8 @@ class DCNv3(nn.Module):
             x = x * (1 - center_feature_scale) + x_proj * center_feature_scale
 
         return x
+
+
 
 # This is the original implementation from InternImage
 # Renamed due to import issues
