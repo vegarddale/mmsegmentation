@@ -350,7 +350,7 @@ class DCNv3(nn.Module):
             norm_layer='LN',
             center_feature_scale=False,
             use_dcn_v4_op=False,
-            strip_conv=False
+            strip_conv=0
             ):
         """
         DCNv3 Module
@@ -404,7 +404,7 @@ class DCNv3(nn.Module):
                 'channels_last'),
             build_act_layer(act_layer))
         self.strip_conv = strip_conv
-        if self.strip_conv:
+        if self.strip_conv == 1:
             self.offset = nn.Linear(
             channels,
             group * kernel_size * kernel_size)
