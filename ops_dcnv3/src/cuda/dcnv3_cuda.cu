@@ -25,7 +25,7 @@ at::Tensor dcnv3_cuda_forward(const at::Tensor &input, const at::Tensor &offset,
                               const int pad_w, const int dilation_h,
                               const int dilation_w, const int group,
                               const int group_channels,
-                              const float offset_scale, const int im2col_step) {
+                              const float offset_scale, const int strip_conv, const int im2col_step) {
     AT_ASSERTM(input.is_contiguous(), "input tensor has to be contiguous");
     AT_ASSERTM(offset.is_contiguous(), "offset tensor has to be contiguous");
     AT_ASSERTM(mask.is_contiguous(), "mask tensor has to be contiguous");
@@ -52,6 +52,11 @@ at::Tensor dcnv3_cuda_forward(const at::Tensor &input, const at::Tensor &offset,
         "Input channels and group times group channels wont match: (%d vs %d).",
         channels, group * group_channels);
 
+    AT_ASSERTM(
+        (strip_conv == 1 && (kernel_w==1 || kernel_h == 1)) || (strip_conv == 0),
+        "Strip convolutions requires one of the kernel dimensions to be single dimensional found shape: (%d , %d).",
+        kernel_w, kernel_h);
+
     auto output =
         at::zeros({batch, height_out, width_out, group * group_channels},
                   input.options());
@@ -77,7 +82,7 @@ at::Tensor dcnv3_cuda_forward(const at::Tensor &input, const at::Tensor &offset,
                     columns.data<scalar_t>(), kernel_h, kernel_w, stride_h,
                     stride_w, pad_h, pad_w, dilation_h, dilation_w, group,
                     group_channels, batch_n, height_in, width_in, height_out,
-                    width_out, offset_scale);
+                    width_out, offset_scale, strip_conv);
             }));
     }
 
@@ -90,7 +95,7 @@ dcnv3_cuda_backward(const at::Tensor &input, const at::Tensor &offset,
                     const int kernel_w, const int stride_h, const int stride_w,
                     const int pad_h, const int pad_w, const int dilation_h,
                     const int dilation_w, const int group,
-                    const int group_channels, const float offset_scale,
+                    const int group_channels, const float offset_scale, const int strip_conv,
                     const at::Tensor &grad_output, const int im2col_step) {
 
     AT_ASSERTM(input.is_contiguous(), "input tensor has to be contiguous");
@@ -155,7 +160,7 @@ dcnv3_cuda_backward(const at::Tensor &input, const at::Tensor &offset,
                     mask.data<scalar_t>() + n * im2col_step_ * per_mask_size,
                     kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                     dilation_h, dilation_w, group, group_channels, batch_n,
-                    height_in, width_in, height_out, width_out, offset_scale,
+                    height_in, width_in, height_out, width_out, offset_scale, strip_conv,
                     grad_input.data<opmath_t>() +
                         n * im2col_step_ * per_input_size,
                     grad_offset.data<opmath_t>() +

@@ -23,7 +23,7 @@ class DCNv3Function(Function):
             ctx, input, offset, mask,
             kernel_h, kernel_w, stride_h, stride_w,
             pad_h, pad_w, dilation_h, dilation_w,
-            group, group_channels, offset_scale, im2col_step):
+            group, group_channels, offset_scale, strip_conv, im2col_step):
         ctx.kernel_h = kernel_h
         ctx.kernel_w = kernel_w
         ctx.stride_h = stride_h
@@ -35,12 +35,13 @@ class DCNv3Function(Function):
         ctx.group = group
         ctx.group_channels = group_channels
         ctx.offset_scale = offset_scale
+        ctx.strip_conv = strip_conv
         ctx.im2col_step = im2col_step
         output = DCNv3.dcnv3_forward(
             input, offset, mask, kernel_h,
             kernel_w, stride_h, stride_w, pad_h,
             pad_w, dilation_h, dilation_w, group,
-            group_channels, offset_scale, ctx.im2col_step)
+            group_channels, offset_scale, strip_conv, ctx.im2col_step)
         ctx.save_for_backward(input, offset, mask)
 
         return output
@@ -55,7 +56,7 @@ class DCNv3Function(Function):
                 input, offset, mask, ctx.kernel_h,
                 ctx.kernel_w, ctx.stride_h, ctx.stride_w, ctx.pad_h,
                 ctx.pad_w, ctx.dilation_h, ctx.dilation_w, ctx.group,
-                ctx.group_channels, ctx.offset_scale, grad_output.contiguous(), ctx.im2col_step)
+                ctx.group_channels, ctx.offset_scale, ctx.strip_conv, grad_output.contiguous(), ctx.im2col_step)
 
         return grad_input, grad_offset, grad_mask, \
             None, None, None, None, None, None, None, None, None, None, None, None
@@ -63,7 +64,7 @@ class DCNv3Function(Function):
     @staticmethod
     def symbolic(g, input, offset, mask, kernel_h, kernel_w, stride_h,
                  stride_w, pad_h, pad_w, dilation_h, dilation_w, group,
-                 group_channels, offset_scale, im2col_step):
+                 group_channels, offset_scale, strip_conv, im2col_step):
         """Symbolic function for mmdeploy::DCNv3.
 
         Returns:
@@ -85,6 +86,7 @@ class DCNv3Function(Function):
             group_i=int(group),
             group_channels_i=int(group_channels),
             offset_scale_f=float(offset_scale),
+            strip_conv_i=int(strip_conv),
             im2col_step_i=int(im2col_step),
         )
 

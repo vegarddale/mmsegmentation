@@ -23,13 +23,13 @@ at::Tensor dcnv3_forward(const at::Tensor &input, const at::Tensor &offset,
                          const int stride_w, const int pad_h, const int pad_w,
                          const int dilation_h, const int dilation_w,
                          const int group, const int group_channels,
-                         const float offset_scale, const int im2col_step) {
+                         const float offset_scale, const int strip_conv, const int im2col_step) {
     if (input.type().is_cuda()) {
 #ifdef WITH_CUDA
         return dcnv3_cuda_forward(input, offset, mask, kernel_h, kernel_w,
                                   stride_h, stride_w, pad_h, pad_w, dilation_h,
                                   dilation_w, group, group_channels,
-                                  offset_scale, im2col_step);
+                                  offset_scale, strip_conv, im2col_step);
 #else
         AT_ERROR("Not compiled with GPU support");
 #endif
@@ -43,14 +43,14 @@ dcnv3_backward(const at::Tensor &input, const at::Tensor &offset,
                const int stride_h, const int stride_w, const int pad_h,
                const int pad_w, const int dilation_h, const int dilation_w,
                const int group, const int group_channels,
-               const float offset_scale, const at::Tensor &grad_output,
+               const float offset_scale, const int strip_conv, const at::Tensor &grad_output,
                const int im2col_step) {
     if (input.type().is_cuda()) {
 #ifdef WITH_CUDA
         return dcnv3_cuda_backward(input, offset, mask, kernel_h, kernel_w,
                                    stride_h, stride_w, pad_h, pad_w, dilation_h,
                                    dilation_w, group, group_channels,
-                                   offset_scale, grad_output, im2col_step);
+                                   offset_scale, strip_conv, grad_output, im2col_step);
 #else
         AT_ERROR("Not compiled with GPU support");
 #endif

@@ -19,7 +19,7 @@ at::Tensor dcnv3_cuda_forward(const at::Tensor &input, const at::Tensor &offset,
                               const int pad_w, const int dilation_h,
                               const int dilation_w, const int group,
                               const int group_channels,
-                              const float offset_scale, const int im2col_step);
+                              const float offset_scale, const int strip_conv, const int im2col_step);
 
 std::vector<at::Tensor>
 dcnv3_cuda_backward(const at::Tensor &input, const at::Tensor &offset,
@@ -27,5 +27,5 @@ dcnv3_cuda_backward(const at::Tensor &input, const at::Tensor &offset,
                     const int kernel_w, const int stride_h, const int stride_w,
                     const int pad_h, const int pad_w, const int dilation_h,
                     const int dilation_w, const int group,
-                    const int group_channels, const float offset_scale,
+                    const int group_channels, const float offset_scale, const int strip_conv,
                     const at::Tensor &grad_output, const int im2col_step);
