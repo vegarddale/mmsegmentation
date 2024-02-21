@@ -339,7 +339,7 @@ class DCNv3(nn.Module):
     def __init__(
             self,
             channels=64,
-            kernel_size=3,
+            kernel_size=(3,3),
             dw_kernel_size=None,
             stride=1,
             pad=1,
@@ -369,7 +369,7 @@ class DCNv3(nn.Module):
             raise ValueError(
                 f'channels must be divisible by group, but got {channels} and {group}')
         _d_per_group = channels // group
-        dw_kernel_size = dw_kernel_size if dw_kernel_size is not None else kernel_size
+        dw_kernel_size = dw_kernel_size if dw_kernel_size is not None else 3
         # you'd better set _d_per_group to a power of 2 which is more efficient in our CUDA implementation
         if not _is_power_of_2(_d_per_group):
             warnings.warn(
@@ -407,14 +407,14 @@ class DCNv3(nn.Module):
         if self.strip_conv == 1:
             self.offset = nn.Linear(
             channels,
-            group * kernel_size * kernel_size)
+            group * kernel_size[0] * kernel_size[1])
         else:
             self.offset = nn.Linear(
                 channels,
-                group * kernel_size * kernel_size * 2)
+                group * kernel_size[0] * kernel_size[1] * 2)
         self.mask = nn.Linear(
             channels,
-            group * kernel_size * kernel_size)
+            group * kernel_size[0] * kernel_size[1])
         self.input_proj = nn.Linear(channels, channels)
         self._reset_parameters()
         
@@ -447,7 +447,7 @@ class DCNv3(nn.Module):
             mask = F.softmax(mask, -1).reshape(N, H, W, -1).type(dtype)
             x = DCNv3Function.apply(
                 input, offset, mask,
-                self.kernel_size, self.kernel_size,
+                self.kernel_size[0], self.kernel_size[1],
                 self.stride, self.stride,
                 self.pad, self.pad,
                 self.dilation, self.dilation,
@@ -471,7 +471,7 @@ class DCNv3(nn.Module):
         
             x = DCNv4Function.apply(
                 input, offset_mask,
-                self.kernel_size, self.kernel_size,
+                self.kernel_size[0], self.kernel_size[1],
                 self.stride, self.stride,
                 self.pad, self.pad,
                 self.dilation, self.dilation,

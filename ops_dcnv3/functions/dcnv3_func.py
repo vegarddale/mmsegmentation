@@ -59,7 +59,7 @@ class DCNv3Function(Function):
                 ctx.group_channels, ctx.offset_scale, ctx.strip_conv, grad_output.contiguous(), ctx.im2col_step)
 
         return grad_input, grad_offset, grad_mask, \
-            None, None, None, None, None, None, None, None, None, None, None, None
+            None, None, None, None, None, None, None, None, None, None, None, None, None
 
     @staticmethod
     def symbolic(g, input, offset, mask, kernel_h, kernel_w, stride_h,

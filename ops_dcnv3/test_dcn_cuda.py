@@ -12,7 +12,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 core_op = getattr(dcnv3, 'DCNv3')
 dcn = core_op(
     channels=3,
-    kernel_size=3,
+    kernel_size=(3,1),
     stride=1,
     pad=1,
     dilation=1,
@@ -21,12 +21,13 @@ dcn = core_op(
     act_layer='GELU',
     norm_layer='LN',
     dw_kernel_size=None,  # for InternImage-H/G
-    center_feature_scale=False
+    center_feature_scale=False,
+    strip_conv=1
 ).to(device)
 
 # Dummy input and move it to the GPU
 dummy_input = torch.randn(1, 256, 256, 3).to(device)
-print("#####################")
+
 # Forward pass
 output = dcn(dummy_input)
 print(output)
