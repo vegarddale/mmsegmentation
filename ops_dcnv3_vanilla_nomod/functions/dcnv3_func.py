@@ -20,7 +20,7 @@ class DCNv3Function(Function):
     @staticmethod
     @custom_fwd
     def forward(
-            ctx, input, offset, mask,
+            ctx, input, offset,
             kernel_h, kernel_w, stride_h, stride_w,
             pad_h, pad_w, dilation_h, dilation_w,
             group, group_channels, offset_scale, im2col_step):
@@ -37,11 +37,11 @@ class DCNv3Function(Function):
         ctx.offset_scale = offset_scale
         ctx.im2col_step = im2col_step
         output = DCNv3.dcnv3_forward(
-            input, offset, mask, kernel_h,
+            input, offset, kernel_h,
             kernel_w, stride_h, stride_w, pad_h,
             pad_w, dilation_h, dilation_w, group,
             group_channels, offset_scale, ctx.im2col_step)
-        ctx.save_for_backward(input, offset, mask)
+        ctx.save_for_backward(input, offset)
 
         return output
 
@@ -49,19 +49,19 @@ class DCNv3Function(Function):
     @once_differentiable
     @custom_bwd
     def backward(ctx, grad_output):
-        input, offset, mask = ctx.saved_tensors
-        grad_input, grad_offset, grad_mask = \
+        input, offset = ctx.saved_tensors
+        grad_input, grad_offset = \
             DCNv3.dcnv3_backward(
-                input, offset, mask, ctx.kernel_h,
+                input, offset, ctx.kernel_h,
                 ctx.kernel_w, ctx.stride_h, ctx.stride_w, ctx.pad_h,
                 ctx.pad_w, ctx.dilation_h, ctx.dilation_w, ctx.group,
                 ctx.group_channels, ctx.offset_scale, grad_output.contiguous(), ctx.im2col_step)
 
-        return grad_input, grad_offset, grad_mask, \
+        return grad_input, grad_offset, \
             None, None, None, None, None, None, None, None, None, None, None, None
 
     @staticmethod
-    def symbolic(g, input, offset, mask, kernel_h, kernel_w, stride_h,
+    def symbolic(g, input, offset, kernel_h, kernel_w, stride_h,
                  stride_w, pad_h, pad_w, dilation_h, dilation_w, group,
                  group_channels, offset_scale, im2col_step):
         """Symbolic function for mmdeploy::DCNv3.
@@ -73,7 +73,6 @@ class DCNv3Function(Function):
             'mmdeploy::TRTDCNv3',
             input,
             offset,
-            mask,
             kernel_h_i=int(kernel_h),
             kernel_w_i=int(kernel_w),
             stride_h_i=int(stride_h),

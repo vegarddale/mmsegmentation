@@ -55,7 +55,6 @@ class Mlp(BaseModule):
 
     def forward(self, x):
         """Forward function."""
-
         x = self.fc1(x)
 
         x = self.dwconv(x)

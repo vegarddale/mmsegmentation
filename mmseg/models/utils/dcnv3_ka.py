@@ -29,13 +29,19 @@ class DCNv3KA(BaseModule):
                  offset_scale=1.0,
                  dw_kernel_size=None, # for InternImage-H/G
                  res_post_norm=False, # for InternImage-H/G
-                 center_feature_scale=False,
-                 strip_conv=0): 
+                 center_feature_scale=False): 
         super().__init__()
         self.channels = channels
         self.core_op = getattr(dcnv3, core_op)
         self.output_proj = nn.Linear(channels, channels)
-        self.dw_dcn = self.core_op(
+        # self.dw_dcn = nn.Conv2d(
+        #     channels,
+        #     channels,
+        #     kernel_size=tuple((kernel_size[0], kernel_size[0])),
+        #     padding=tuple((pad[0], pad[0])),
+        #     groups=channels)
+        self.dw_dcn = self.core_op( TODO her vil vi teste å bytte dw_dcn med en vanlig dw convolution, det vi vil teste med det er large deformable kernel attention(disse modellene burde være
+                                                                                                                                                                    små nok i base att vi kan øke størrelsen, hvis ikke er de for store som base)
             channels=channels,
             kernel_size=tuple((kernel_size[0], kernel_size[0])),
             stride=1,
@@ -46,8 +52,7 @@ class DCNv3KA(BaseModule):
             act_layer=act_layer,
             norm_layer=norm_layer,
             dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-            center_feature_scale=center_feature_scale,
-            strip_conv=strip_conv)
+            center_feature_scale=center_feature_scale)
         
         self.dw_d_dcn = self.core_op(
             channels=channels,
@@ -60,15 +65,16 @@ class DCNv3KA(BaseModule):
             act_layer=act_layer,
             norm_layer=norm_layer,
             dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-            center_feature_scale=center_feature_scale,
-            strip_conv=strip_conv
+            center_feature_scale=center_feature_scale
         )
 
     def forward(self, x):
         u = x.clone()
         u = u.permute(0,3,1,2)
         # TODO add a dw 1x1 that is paralell with the attn(similar to v3+)(will be used to mimic channel attention)
+        # x = x.permute(0,3,1,2)
         x = self.dw_dcn(x)
+        # x = x.permute(0,2,3,1)
         x = self.dw_d_dcn(x)
         x = self.output_proj(x)
         x = x.permute(0,3,1,2)
@@ -139,19 +145,17 @@ class DCNv3_SW_KA(BaseModule):
                         dw_kernel_size=dw_kernel_size, # for InternImage-H/G
                         center_feature_scale=center_feature_scale,
                         strip_conv=strip_conv
-                        
                     ))
-        
         self.conv3 = nn.Conv2d(channels, channels, 1)
 
     def forward(self, x):
         """Forward function."""
-        torch.cuda.empty_cache()
+        x = x.permute(0,3,1,2).contiguous()
         u = x.clone()
-        u = u.permute(0,3,1,2)
-        x = x.permute(0,3,1,2)
+
         attn = self.conv0(x)
-        attn = attn.permute(0,2,3,1)
+        attn = attn.permute(0,2,3,1).contiguous()
+        
         # Multi-Scale Feature extraction
         attn_0 = self.conv0_1(attn)
         attn_0 = self.conv0_2(attn_0)
@@ -161,21 +165,19 @@ class DCNv3_SW_KA(BaseModule):
         
         attn_2 = self.conv2_1(attn)
         attn_2 = self.conv2_2(attn_2)
-        
+
         attn = attn + attn_0 + attn_1 + attn_2
+        
         # Channel Mixing
-        print(attn.shape)
-        print("##########################################")
-        attn = attn.permute(0,3,1,2)
+        attn = attn.permute(0,3,1,2).contiguous()
         attn = self.conv3(attn)
-        attn = attn.permute(0,3,1,2)
         # Convolutional Attention
         x = attn * u
 
         return x
 
     
-    def _reset_parameters(self):#TODO fix
+    def _reset_parameters(self):
         
         self.conv0_1._reset_parameters()
         self.conv0_2._reset_parameters()
