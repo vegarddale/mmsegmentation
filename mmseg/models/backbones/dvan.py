@@ -55,7 +55,6 @@ class Mlp(BaseModule):
 
     def forward(self, x):
         """Forward function."""
-
         x = self.fc1(x)
 
         x = self.dwconv(x)
@@ -132,25 +131,28 @@ class MSCASpatialAttention(BaseModule):
     """
 
     def __init__(self,
-                 core_op, # {
+                 core_op,
+                 attn_module,
                  channels,
+                 kernel_size,
+                 pad,
                  group,
                  act_layer='GELU',
                  norm_layer='LN',
                  offset_scale=1.0,
                  dw_kernel_size=None, # for InternImage-H/G
-                 center_feature_scale=False, # } disse trengs for dcnv3
+                 center_feature_scale=False, 
                  act_cfg=dict(type='GELU')):
 
         super().__init__()
         self.proj_1 = nn.Conv2d(channels, channels, 1)
         self.activation = build_activation_layer(act_cfg)
-        self.attn = core_op(
-            core_op='Simple_DCNv3_pytorch',
+        self.attn = attn_module(
+            core_op=core_op,
             channels=channels,
-            kernel_size=5,
+            kernel_size=kernel_size,
             stride=1,
-            pad=2,
+            pad=pad,
             dilation=1,
             group=channels,
             offset_scale=offset_scale,
@@ -159,7 +161,6 @@ class MSCASpatialAttention(BaseModule):
             dw_kernel_size=dw_kernel_size, # for InternImage-H/G
             center_feature_scale=center_feature_scale)
         
-
         self.proj_2 = nn.Conv2d(channels, channels, 1)
         
     def forward(self, x):
@@ -204,14 +205,17 @@ class MSCABlock(BaseModule):
     """
 
     def __init__(self,
-                 core_op,# {
+                 core_op,
+                 attn_module,
                  channels,
+                 kernel_size,
+                 pad,
                  group,
                  act_layer='GELU',
                  norm_layer='LN',
                  offset_scale=1.0,
                  dw_kernel_size=None, # for InternImage-H/G
-                 center_feature_scale=False, # } disse trengs for dcnv3
+                 center_feature_scale=False,
                  mlp_ratio=4.,
                  drop=0.,
                  drop_path=0.,
@@ -221,7 +225,10 @@ class MSCABlock(BaseModule):
         self.norm1 = build_norm_layer(norm_cfg, channels)[1]
         self.attn = MSCASpatialAttention(
                  core_op=core_op,
+                 attn_module=attn_module,
                  channels=channels,
+                 kernel_size=kernel_size,
+                 pad=pad,
                  group=group,
                  act_layer=act_layer,
                  norm_layer=norm_layer,
@@ -335,7 +342,8 @@ class DVAN(BaseModule):
     """
 
     def __init__(self,
-                 core_op="DCNv3KA",
+                 core_op="DCNv3",
+                 attn_module="DCNv3KA",
                  groups=[2, 4, 8, 16],
                  act_layer='GELU',
                  norm_layer='LN',
@@ -343,6 +351,8 @@ class DVAN(BaseModule):
                  dw_kernel_size=None, # for InternImage-H/G
                  center_feature_scale=False,
                  in_channels=3,
+                 kernel_size=[5,7],
+                 pad=[2,3],
                  embed_dims=[64, 128, 256, 512],
                  mlp_ratios=[4, 4, 4, 4],
                  drop_rate=0.,
@@ -365,6 +375,7 @@ class DVAN(BaseModule):
         elif pretrained is not None:
             raise TypeError('pretrained must be a str or None')
         self.core_op = core_op
+        self.attn_module=attn_module
         self.depths = depths
         self.num_stages = num_stages
 
@@ -385,9 +396,12 @@ class DVAN(BaseModule):
                     norm_cfg=norm_cfg)
             block = nn.ModuleList([
                 MSCABlock(
-                    core_op=getattr(dcnv3_ka, core_op),
+                    core_op=core_op,
+                    attn_module=getattr(dcnv3_ka, attn_module),
                     group=groups[i],
                     channels=embed_dims[i],
+                    kernel_size=kernel_size,
+                    pad=pad,
                     mlp_ratio=mlp_ratios[i],
                     drop=drop_rate,
                     drop_path=dpr[cur + j],
@@ -421,7 +435,7 @@ class DVAN(BaseModule):
             super().init_weights()
 
     def _init_deform_weights(self, m):
-        if isinstance(m, getattr(dcnv3_ka, self.core_op)):
+        if isinstance(m, getattr(dcnv3_ka, self.attn_module)):
             m._reset_parameters()
 
     def forward(self, x):

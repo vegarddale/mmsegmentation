@@ -1,6 +1,5 @@
 # optimizer
 optim_wrapper = dict(
-    _delete_=True,
     type='OptimWrapper',
     optimizer=dict(
         type='AdamW', lr=0.00006, betas=(0.9, 0.999), weight_decay=0.01),
@@ -18,13 +17,13 @@ param_scheduler = [
         type='PolyLR',
         power=1.0,
         begin=1500,
-        end=160000,
+        end=240000,
         eta_min=0.0,
         by_epoch=False,
     )
 ]
 train_cfg = dict(
-    type='IterBasedTrainLoop', max_iters=160000, val_interval=8000)
+    type='IterBasedTrainLoop', max_iters=240000, val_interval=8000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(

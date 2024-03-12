@@ -84,8 +84,8 @@ __device__ void dcnv3_col2im_bilinear(
     const scalar_t *&bottom_data, const int &height, const int &width,
     const int &nheads, const int &group_channels, const opmath_t &h,
     const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale,
-    const opmath_t &top_grad, const opmath_t &mask, opmath_t *&grad_im,
-    opmath_t *grad_offset, opmath_t *grad_mask) {
+    const opmath_t &top_grad, opmath_t *&grad_im,
+    opmath_t *grad_offset) {
     const int h_low = floor(h);
     const int w_low = floor(w);
     const int h_high = h_low + 1;
@@ -104,7 +104,7 @@ __device__ void dcnv3_col2im_bilinear(
     const int base_ptr = m * group_channels + c;
 
     const opmath_t w1 = hh * hw, w2 = hh * lw, w3 = lh * hw, w4 = lh * lw;
-    const opmath_t top_grad_im = top_grad * mask;
+    const opmath_t top_grad_im = top_grad;
     opmath_t grad_h_weight = 0, grad_w_weight = 0;
 
     opmath_t v1 = 0;
@@ -141,8 +141,8 @@ __device__ void dcnv3_col2im_bilinear(
     }
 
     const opmath_t val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
-    *grad_mask = top_grad * val;
     *grad_offset = offset_scale * grad_w_weight * top_grad_im;
+    *(grad_offset + 1) = offset_scale * grad_h_weight * top_grad_im;
 }
 
 template <typename scalar_t>
@@ -150,8 +150,8 @@ __device__ void dcnv3_col2im_bilinear_gm(
     const scalar_t *&bottom_data, const int &height, const int &width,
     const int &nheads, const int &group_channels, const opmath_t &h,
     const opmath_t &w, const int &m, const int &c, const opmath_t offset_scale,
-    const opmath_t &top_grad, const opmath_t &mask, opmath_t *&grad_im,
-    opmath_t *grad_offset, opmath_t *grad_mask) {
+    const opmath_t &top_grad, opmath_t *&grad_im,
+    opmath_t *grad_offset) {
     const int h_low = floor(h);
     const int w_low = floor(w);
     const int h_high = h_low + 1;
@@ -170,7 +170,7 @@ __device__ void dcnv3_col2im_bilinear_gm(
     const int base_ptr = m * group_channels + c;
 
     const opmath_t w1 = hh * hw, w2 = hh * lw, w3 = lh * hw, w4 = lh * lw;
-    const opmath_t top_grad_im = top_grad * mask;
+    const opmath_t top_grad_im = top_grad;
     opmath_t grad_h_weight = 0, grad_w_weight = 0;
 
     opmath_t v1 = 0;
@@ -207,14 +207,14 @@ __device__ void dcnv3_col2im_bilinear_gm(
     }
 
     const opmath_t val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
-    atomicAdd(grad_mask, top_grad * val);
     atomicAdd(grad_offset, offset_scale * grad_w_weight * top_grad_im);
+    atomicAdd(grad_offset + 1, offset_scale * grad_h_weight * top_grad_im);
 }
 
 template <typename scalar_t>
 __global__ void dcnv3_im2col_gpu_kernel(
     const int num_kernels, const scalar_t *data_im, const scalar_t *data_offset,
-    const scalar_t *data_mask, scalar_t *data_col, const int kernel_h,
+    scalar_t *data_col, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
@@ -243,34 +243,27 @@ __global__ void dcnv3_im2col_gpu_kernel(
         const int qid_stride = group * group_channels;
         opmath_t col = 0;
         const scalar_t *data_im_ptr = data_im + b_col * input_size * qid_stride;
+        // top-left
         const opmath_t p0_w_ =
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
-        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                if (kernel_w == 1) {
-                    offset_w = data_offset[data_weight_ptr];
-                    offset_h = 0;
-                } else {
-                    offset_w = 0;
-                    offset_h = data_offset[data_weight_ptr];
-                }
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     col += dcnv3_im2col_bilinear(
                                data_im_ptr, height_in, width_in, group,
-                               group_channels, loc_h, loc_w, g_col, c_col) *
-                           weight;
+                               group_channels, loc_h, loc_w, g_col, c_col);
                 }
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
+                data_loc_w_ptr += 2;
             }
         }
         *data_col_ptr = col;
@@ -281,16 +274,14 @@ __global__ void dcnv3_im2col_gpu_kernel(
 template <typename scalar_t, unsigned int blockSize>
 __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
     const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
-        __shared__ opmath_t cache_grad_offset[blockSize];
-        __shared__ opmath_t cache_grad_mask[blockSize];
+        __shared__ opmath_t cache_grad_offset[blockSize * 2];
         unsigned int tid = threadIdx.x;
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -312,8 +303,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
         int data_weight_ptr = sampling_index * kernel_size;
         int data_loc_w_ptr = data_weight_ptr << 1;
         const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
+        grad_offset += grad_sampling_ptr << 1;
         const int qid_stride = group * group_channels;
         const int im_ptr_offset = b_col * input_size * qid_stride;
         const scalar_t *data_im_ptr = data_im + im_ptr_offset;
@@ -322,51 +312,46 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
-        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                if (kernel_w == 1) {
-                    offset_w = data_offset[data_weight_ptr];
-                    offset_h = 0;
-                } else {
-                    offset_w = 0;
-                    offset_h = data_offset[data_weight_ptr];
-                }
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
-                *(cache_grad_offset + threadIdx.x) = 0;
-                *(cache_grad_mask + threadIdx.x) = 0;
+                *(cache_grad_offset + (threadIdx.x << 1)) = 0;
+                *(cache_grad_offset + ((threadIdx.x << 1) + 1)) = 0;
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr,
-                        cache_grad_offset + threadIdx.x,
-                        cache_grad_mask + threadIdx.x);
+                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad, grad_im_ptr,
+                        cache_grad_offset + (threadIdx.x << 1));
                 }
 
                 __syncthreads();
                 if (tid == 0) {
                     opmath_t _grad_w = cache_grad_offset[0],
-                             _grad_a = cache_grad_mask[0];
+                             _grad_h = cache_grad_offset[1];
+
+                    int sid = 2;
                     for (unsigned int tid = 1; tid < blockSize; ++tid) {
-                        _grad_w += cache_grad_offset[tid];
-                        _grad_a += cache_grad_mask[tid];
+                        _grad_w += cache_grad_offset[sid];
+                        _grad_h += cache_grad_offset[sid + 1];
+
+                        sid += 2;
                     }
 
                     *grad_offset = _grad_w;
-                    *grad_mask = _grad_a;
+                    *(grad_offset + 1) = _grad_h;
+
                 }
                 __syncthreads();
 
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
             }
         }
     }
@@ -375,16 +360,14 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(
 template <typename scalar_t, unsigned int blockSize>
 __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
     const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
-        __shared__ opmath_t cache_grad_offset[blockSize];
-        __shared__ opmath_t cache_grad_mask[blockSize];
+        __shared__ opmath_t cache_grad_offset[blockSize * 2];
         unsigned int tid = threadIdx.x;
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -406,8 +389,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
         int data_weight_ptr = sampling_index * kernel_size;
         int data_loc_w_ptr = data_weight_ptr << 1;
         const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
+        grad_offset += grad_sampling_ptr << 1;
         const int qid_stride = group * group_channels;
         const int im_ptr_offset = b_col * input_size * qid_stride;
         const scalar_t *data_im_ptr = data_im + im_ptr_offset;
@@ -416,53 +398,48 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
-        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                if (kernel_w == 1) {
-                    offset_w = data_offset[data_weight_ptr];
-                    offset_h = 0;
-                } else {
-                    offset_w = 0;
-                    offset_h = data_offset[data_weight_ptr];
-                }
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
-                *(cache_grad_offset + threadIdx.x) = 0;
-                *(cache_grad_mask + threadIdx.x) = 0;
+
+                *(cache_grad_offset + (threadIdx.x << 1)) = 0;
+                *(cache_grad_offset + ((threadIdx.x << 1) + 1)) = 0;
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
                         loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr,
-                        cache_grad_offset + threadIdx.x,
-                        cache_grad_mask + threadIdx.x);
+                        grad_im_ptr,
+                        cache_grad_offset + (threadIdx.x << 1));
                 }
 
                 __syncthreads();
 
                 for (unsigned int s = blockSize / 2; s > 0; s >>= 1) {
                     if (tid < s) {
-                        cache_grad_mask[tid] += cache_grad_mask[tid + s];
-                        cache_grad_offset[tid] += cache_grad_offset[tid + s];
+                        const unsigned int xid1 = tid << 1;
+                        const unsigned int xid2 = (tid + s) << 1;
+                        cache_grad_offset[xid1] += cache_grad_offset[xid2];
+                        cache_grad_offset[xid1 + 1] +=
+                            cache_grad_offset[xid2 + 1];
                     }
                     __syncthreads();
                 }
 
                 if (tid == 0) {
                     *grad_offset = cache_grad_offset[0];
-                    *grad_mask = cache_grad_mask[0];
+                    *(grad_offset + 1) = cache_grad_offset[1];
                 }
                 __syncthreads();
 
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
             }
         }
     }
@@ -471,17 +448,15 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2(
 template <typename scalar_t>
 __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
     const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         extern __shared__ int _s[];
         opmath_t *cache_grad_offset = (opmath_t *)_s;
-        opmath_t *cache_grad_mask = cache_grad_offset + blockDim.x;
         unsigned int tid = threadIdx.x;
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -503,8 +478,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
         int data_weight_ptr = sampling_index * kernel_size;
         int data_loc_w_ptr = data_weight_ptr << 1;
         const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
+        grad_offset += grad_sampling_ptr << 1;
         const int qid_stride = group * group_channels;
         const int im_ptr_offset = b_col * input_size * qid_stride;
         const scalar_t *data_im_ptr = data_im + im_ptr_offset;
@@ -515,43 +489,42 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_weight_ptr];
-                const opmath_t offset_h = 0;
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
-                *(cache_grad_offset + threadIdx.x) = 0;
-                *(cache_grad_mask + threadIdx.x) = 0;
+                *(cache_grad_offset + (threadIdx.x << 1)) = 0;
+                *(cache_grad_offset + ((threadIdx.x << 1) + 1)) = 0;
+
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr,
-                        cache_grad_offset + threadIdx.x,
-                        cache_grad_mask + threadIdx.x);
+                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad, grad_im_ptr,
+                        cache_grad_offset + (threadIdx.x << 1));
                 }
 
                 __syncthreads();
                 if (tid == 0) {
                     opmath_t _grad_w = cache_grad_offset[0],
-                             _grad_a = cache_grad_mask[0];
+                             _grad_h = cache_grad_offset[1];
+                    int sid = 2;
                     for (unsigned int tid = 1; tid < blockDim.x; ++tid) {
-                        _grad_w += cache_grad_offset[tid];
-                        _grad_a += cache_grad_mask[tid];
+                        _grad_w += cache_grad_offset[sid];
+                        _grad_h += cache_grad_offset[sid + 1];
+                        sid += 2;
                     }
 
                     *grad_offset = _grad_w;
-                    *grad_mask = _grad_a;
+                    *(grad_offset + 1) = _grad_h;
                 }
                 __syncthreads();
 
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
             }
         }
     }
@@ -560,17 +533,15 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v1(
 template <typename scalar_t>
 __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2(
     const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         extern __shared__ int _s[];
         opmath_t *cache_grad_offset = (opmath_t *)_s;
-        opmath_t *cache_grad_mask = cache_grad_offset + blockDim.x;
         unsigned int tid = threadIdx.x;
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -592,112 +563,7 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2(
         int data_weight_ptr = sampling_index * kernel_size;
         int data_loc_w_ptr = data_weight_ptr << 1;
         const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
-        const int qid_stride = group * group_channels;
-        const int im_ptr_offset = b_col * input_size * qid_stride;
-        const scalar_t *data_im_ptr = data_im + im_ptr_offset;
-        opmath_t *grad_im_ptr = grad_im + im_ptr_offset;
-        const opmath_t p0_w_ =
-            p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
-        const opmath_t p0_h_ =
-            p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
-        opmath_t offset_w, offset_h;
-        for (int i = 0; i < kernel_w; ++i) {
-            for (int j = 0; j < kernel_h; ++j) {
-                if (kernel_w == 1) {
-                    offset_w = data_offset[data_weight_ptr];
-                    offset_h = 0;
-                } else {
-                    offset_w = 0;
-                    offset_h = data_offset[data_weight_ptr];
-                }
-                const opmath_t loc_w =
-                    p0_w_ + (i * dilation_w + offset_w) * offset_scale;
-                const opmath_t loc_h =
-                    p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
-                *(cache_grad_offset + threadIdx.x) = 0;
-                *(cache_grad_mask + threadIdx.x) = 0;
-                if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
-                    loc_w < width_in) {
-                    dcnv3_col2im_bilinear(
-                        data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr,
-                        cache_grad_offset + threadIdx.x,
-                        cache_grad_mask + threadIdx.x);
-                }
-
-                __syncthreads();
-
-                for (unsigned int s = blockDim.x / 2, spre = blockDim.x; s > 0;
-                     s >>= 1, spre >>= 1) {
-                    if (tid < s) {
-                        cache_grad_mask[tid] += cache_grad_mask[tid + s];
-                        cache_grad_offset[tid] += cache_grad_offset[tid + s];
-                        if (tid + (s << 1) < spre) {
-                            cache_grad_mask[tid] +=
-                                cache_grad_mask[tid + (s << 1)];
-                            cache_grad_offset[tid] +=
-                                cache_grad_offset[tid + (s << 1)];
-                        }
-                    }
-                    __syncthreads();
-                }
-
-                if (tid == 0) {
-                    *grad_offset = cache_grad_offset[0];
-                    *grad_mask = cache_grad_mask[0];
-                }
-                __syncthreads();
-
-                data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
-            }
-        }
-    }
-}
-
-template <typename scalar_t>
-__global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
-    const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
-    const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
-    const int pad_w, const int dilation_h, const int dilation_w,
-    const int group, const int group_channels, const int height_in,
-    const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
-    CUDA_KERNEL_LOOP(index, num_kernels) {
-        extern __shared__ int _s[];
-        opmath_t *cache_grad_offset = (opmath_t *)_s;
-        opmath_t *cache_grad_mask = cache_grad_offset + blockDim.x;
-        unsigned int tid = threadIdx.x;
-        int _temp = index;
-        const int c_col = _temp % group_channels;
-        _temp /= group_channels;
-        const int sampling_index = _temp;
-        const int g_col = _temp % group;
-        _temp /= group;
-        const int p0_w = ((dilation_w * (kernel_w - 1)) >> 1) - pad_w +
-                         (_temp % width_out) * stride_w;
-        _temp /= width_out;
-        const int p0_h = ((dilation_h * (kernel_h - 1)) >> 1) - pad_h +
-                         (_temp % height_out) * stride_h;
-        _temp /= height_out;
-        const int b_col = _temp;
-
-        const opmath_t top_grad = grad_col[index];
-        const int input_size = height_in * width_in;
-        const int kernel_size = kernel_h * kernel_w;
-        int data_weight_ptr = sampling_index * kernel_size;
-        int data_loc_w_ptr = data_weight_ptr << 1;
-        const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
+        grad_offset += grad_sampling_ptr << 1;
         const int qid_stride = group * group_channels;
         const int im_ptr_offset = b_col * input_size * qid_stride;
         const scalar_t *data_im_ptr = data_im + im_ptr_offset;
@@ -708,23 +574,20 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                const opmath_t offset_w = data_offset[data_weight_ptr];
-                const opmath_t offset_h = 0;
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
-                *(cache_grad_offset + threadIdx.x) = 0;
-                *(cache_grad_mask + threadIdx.x) = 0;
+                *(cache_grad_offset + (threadIdx.x << 1)) = 0;
+                *(cache_grad_offset + ((threadIdx.x << 1) + 1)) = 0;
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear(
                         data_im_ptr, height_in, width_in, group, group_channels,
-                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr,
-                        cache_grad_offset + threadIdx.x,
-                        cache_grad_mask + threadIdx.x);
+                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad, grad_im_ptr,
+                        cache_grad_offset + (threadIdx.x << 1));
                 }
 
                 __syncthreads();
@@ -734,13 +597,108 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
                     if (tid < s) {
                         const unsigned int xid1 = tid << 1;
                         const unsigned int xid2 = (tid + s) << 1;
-                        cache_grad_mask[tid] += cache_grad_mask[tid + s];
-                        cache_grad_offset[tid] += cache_grad_offset[tid + s];
+                        cache_grad_offset[xid1] += cache_grad_offset[xid2];
+                        cache_grad_offset[xid1 + 1] +=
+                            cache_grad_offset[xid2 + 1];
                         if (tid + (s << 1) < spre) {
-                            cache_grad_mask[tid] +=
-                                cache_grad_mask[tid + (s << 1)];
-                            cache_grad_offset[tid] +=
-                                cache_grad_offset[tid + (s << 1)];
+                            cache_grad_offset[xid1] +=
+                                cache_grad_offset[xid2 + (s << 1)];
+                            cache_grad_offset[xid1 + 1] +=
+                                cache_grad_offset[xid2 + 1 + (s << 1)];
+                        }
+                    }
+                    __syncthreads();
+                }
+
+                if (tid == 0) {
+                    *grad_offset = cache_grad_offset[0];
+                    *(grad_offset + 1) = cache_grad_offset[1];
+                }
+                __syncthreads();
+
+                data_weight_ptr += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
+            }
+        }
+    }
+}
+
+template <typename scalar_t>
+__global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
+    const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
+    const scalar_t *data_offset, const int kernel_h,
+    const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
+    const int pad_w, const int dilation_h, const int dilation_w,
+    const int group, const int group_channels, const int height_in,
+    const int width_in, const int height_out, const int width_out,
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
+    CUDA_KERNEL_LOOP(index, num_kernels) {
+        extern __shared__ int _s[];
+        opmath_t *cache_grad_offset = (opmath_t *)_s;
+        unsigned int tid = threadIdx.x;
+        int _temp = index;
+        const int c_col = _temp % group_channels;
+        _temp /= group_channels;
+        const int sampling_index = _temp;
+        const int g_col = _temp % group;
+        _temp /= group;
+        const int p0_w = ((dilation_w * (kernel_w - 1)) >> 1) - pad_w +
+                         (_temp % width_out) * stride_w;
+        _temp /= width_out;
+        const int p0_h = ((dilation_h * (kernel_h - 1)) >> 1) - pad_h +
+                         (_temp % height_out) * stride_h;
+        _temp /= height_out;
+        const int b_col = _temp;
+
+        const opmath_t top_grad = grad_col[index];
+        const int input_size = height_in * width_in;
+        const int kernel_size = kernel_h * kernel_w;
+        int data_weight_ptr = sampling_index * kernel_size;
+        int data_loc_w_ptr = data_weight_ptr << 1;
+        const int grad_sampling_ptr = data_weight_ptr;
+        grad_offset += grad_sampling_ptr << 1;
+        const int qid_stride = group * group_channels;
+        const int im_ptr_offset = b_col * input_size * qid_stride;
+        const scalar_t *data_im_ptr = data_im + im_ptr_offset;
+        opmath_t *grad_im_ptr = grad_im + im_ptr_offset;
+        const opmath_t p0_w_ =
+            p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
+        const opmath_t p0_h_ =
+            p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
+        for (int i = 0; i < kernel_w; ++i) {
+            for (int j = 0; j < kernel_h; ++j) {
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
+                const opmath_t loc_w =
+                    p0_w_ + (i * dilation_w + offset_w) * offset_scale;
+                const opmath_t loc_h =
+                    p0_h_ + (j * dilation_h + offset_h) * offset_scale;
+                *(cache_grad_offset + (threadIdx.x << 1)) = 0;
+                *(cache_grad_offset + ((threadIdx.x << 1) + 1)) = 0;
+                if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
+                    loc_w < width_in) {
+                    dcnv3_col2im_bilinear(
+                        data_im_ptr, height_in, width_in, group, group_channels,
+                        loc_h, loc_w, g_col, c_col, offset_scale, top_grad, grad_im_ptr,
+                        cache_grad_offset + (threadIdx.x << 1));
+                }
+
+                __syncthreads();
+
+                for (unsigned int s = blockDim.x / 2, spre = blockDim.x; s > 0;
+                     s >>= 1, spre >>= 1) {
+                    if (tid < s) {
+                        const unsigned int xid1 = tid << 1;
+                        const unsigned int xid2 = (tid + s) << 1;
+                        cache_grad_offset[xid1] += cache_grad_offset[xid2];
+                        cache_grad_offset[xid1 + 1] +=
+                            cache_grad_offset[xid2 + 1];
+                        if (tid + (s << 1) < spre) {
+                            cache_grad_offset[xid1] +=
+                                cache_grad_offset[xid2 + (s << 1)];
+                            cache_grad_offset[xid1 + 1] +=
+                                cache_grad_offset[xid2 + 1 + (s << 1)];
                         }
                     }
                     __syncthreads();
@@ -748,14 +706,13 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
 
                 if (tid == 0) {
                     atomicAdd(grad_offset, cache_grad_offset[0]);
-                    atomicAdd(grad_mask, cache_grad_mask[0]);
+                    atomicAdd(grad_offset + 1, cache_grad_offset[1]);
                 }
                 __syncthreads();
 
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
             }
         }
     }
@@ -764,13 +721,12 @@ __global__ void dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
 template <typename scalar_t>
 __global__ void dcnv3_col2im_gpu_kernel_gm(
     const int num_kernels, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int height_in,
     const int width_in, const int height_out, const int width_out,
-    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset,
-    opmath_t *grad_mask) {
+    const opmath_t offset_scale, opmath_t *grad_im, opmath_t *grad_offset) {
     CUDA_KERNEL_LOOP(index, num_kernels) {
         int _temp = index;
         const int c_col = _temp % group_channels;
@@ -792,8 +748,7 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
         int data_weight_ptr = sampling_index * kernel_size;
         int data_loc_w_ptr = data_weight_ptr << 1;
         const int grad_sampling_ptr = data_weight_ptr;
-        grad_offset += grad_sampling_ptr;
-        grad_mask += grad_sampling_ptr;
+        grad_offset += grad_sampling_ptr << 1;
         const int qid_stride = group * group_channels;
         const int im_ptr_offset = b_col * input_size * qid_stride;
         const scalar_t *data_im_ptr = data_im + im_ptr_offset;
@@ -802,32 +757,24 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
             p0_w - ((dilation_w * (kernel_w - 1)) >> 1) * offset_scale;
         const opmath_t p0_h_ =
             p0_h - ((dilation_h * (kernel_h - 1)) >> 1) * offset_scale;
-        opmath_t offset_w, offset_h;
         for (int i = 0; i < kernel_w; ++i) {
             for (int j = 0; j < kernel_h; ++j) {
-                if (kernel_w == 1) {
-                    offset_w = data_offset[data_weight_ptr];
-                    offset_h = 0;
-                } else {
-                    offset_w = 0;
-                    offset_h = data_offset[data_weight_ptr];
-                }
+                const opmath_t offset_w = data_offset[data_loc_w_ptr];
+                const opmath_t offset_h = data_offset[data_loc_w_ptr + 1];
                 const opmath_t loc_w =
                     p0_w_ + (i * dilation_w + offset_w) * offset_scale;
                 const opmath_t loc_h =
                     p0_h_ + (j * dilation_h + offset_h) * offset_scale;
-                const opmath_t weight = data_mask[data_weight_ptr];
                 if (loc_h > -1 && loc_w > -1 && loc_h < height_in &&
                     loc_w < width_in) {
                     dcnv3_col2im_bilinear_gm(
                         data_im_ptr, height_in, width_in, group, group_channels,
                         loc_h, loc_w, g_col, c_col, offset_scale, top_grad,
-                        weight, grad_im_ptr, grad_offset, grad_mask);
+                        grad_im_ptr, grad_offset);
                 }
                 data_weight_ptr += 1;
-                data_loc_w_ptr += 1;
-                grad_mask += 1;
-                grad_offset += 1;
+                data_loc_w_ptr += 2;
+                grad_offset += 2;
             }
         }
     }
@@ -835,7 +782,7 @@ __global__ void dcnv3_col2im_gpu_kernel_gm(
 
 template <typename scalar_t>
 void dcnv3_im2col_cuda(cudaStream_t stream, const scalar_t *data_im,
-                       const scalar_t *data_offset, const scalar_t *data_mask,
+                       const scalar_t *data_offset,
                        scalar_t *data_col, const int kernel_h,
                        const int kernel_w, const int stride_h,
                        const int stride_w, const int pad_h, const int pad_w,
@@ -851,7 +798,7 @@ void dcnv3_im2col_cuda(cudaStream_t stream, const scalar_t *data_im,
     const int num_threads = CUDA_NUM_THREADS;
     dcnv3_im2col_gpu_kernel<scalar_t>
         <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
-           stream>>>(num_kernels, data_im, data_offset, data_mask, data_col,
+           stream>>>(num_kernels, data_im, data_offset, data_col,
                      kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                      dilation_h, dilation_w, group, group_channels, height_in,
                      width_in, height_out, width_out, offset_scale);
@@ -865,13 +812,13 @@ void dcnv3_im2col_cuda(cudaStream_t stream, const scalar_t *data_im,
 template <typename scalar_t>
 void dcnv3_col2im_cuda(
     cudaStream_t stream, const scalar_t *grad_col, const scalar_t *data_im,
-    const scalar_t *data_offset, const scalar_t *data_mask, const int kernel_h,
+    const scalar_t *data_offset, const int kernel_h,
     const int kernel_w, const int stride_h, const int stride_w, const int pad_h,
     const int pad_w, const int dilation_h, const int dilation_w,
     const int group, const int group_channels, const int batch_n,
     const int height_in, const int width_in, const int height_out,
     const int width_out, const opmath_t offset_scale, opmath_t *grad_im,
-    opmath_t *grad_offset, opmath_t *grad_mask) {
+    opmath_t *grad_offset) {
     const int num_threads =
         (group_channels > CUDA_NUM_THREADS) ? CUDA_NUM_THREADS : group_channels;
     const int num_kernels =
@@ -883,20 +830,19 @@ void dcnv3_col2im_cuda(
             dcnv3_col2im_gpu_kernel_shm_reduce_v2_multi_blocks<scalar_t>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads,
                    num_threads * 3 * sizeof(opmath_t), stream>>>(
-                    num_kernels, grad_col, data_im, data_offset, data_mask,
+                    num_kernels, grad_col, data_im, data_offset,
                     kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                     dilation_h, dilation_w, group, group_channels, height_in,
                     width_in, height_out, width_out, offset_scale, grad_im,
-                    grad_offset, grad_mask);
+                    grad_offset);
         } else {
             dcnv3_col2im_gpu_kernel_gm<scalar_t>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
         }
     } else {
         switch (group_channels) {
@@ -904,132 +850,121 @@ void dcnv3_col2im_cuda(
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 1>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 2:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 2>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 4:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 4>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 8:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 8>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 16:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 16>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 32:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1<scalar_t, 32>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 64:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2<scalar_t, 64>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 128:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2<scalar_t, 128>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 256:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2<scalar_t, 256>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 512:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2<scalar_t, 512>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         case 1024:
             dcnv3_col2im_gpu_kernel_shm_blocksize_aware_reduce_v2<scalar_t,
                                                                   1024>
                 <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0,
                    stream>>>(num_kernels, grad_col, data_im, data_offset,
-                             data_mask, kernel_h, kernel_w, stride_h, stride_w,
+                             kernel_h, kernel_w, stride_h, stride_w,
                              pad_h, pad_w, dilation_h, dilation_w, group,
                              group_channels, height_in, width_in, height_out,
-                             width_out, offset_scale, grad_im, grad_offset,
-                             grad_mask);
+                             width_out, offset_scale, grad_im, grad_offset);
             break;
         default:
             if (group_channels < 64) {
                 dcnv3_col2im_gpu_kernel_shm_reduce_v1<scalar_t>
                     <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads,
                        num_threads * 3 * sizeof(opmath_t), stream>>>(
-                        num_kernels, grad_col, data_im, data_offset, data_mask,
+                        num_kernels, grad_col, data_im, data_offset,
                         kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                         dilation_h, dilation_w, group, group_channels,
                         height_in, width_in, height_out, width_out,
-                        offset_scale, grad_im, grad_offset, grad_mask);
+                        offset_scale, grad_im, grad_offset);
             } else {
                 dcnv3_col2im_gpu_kernel_shm_reduce_v2<scalar_t>
                     <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads,
                        num_threads * 3 * sizeof(opmath_t), stream>>>(
-                        num_kernels, grad_col, data_im, data_offset, data_mask,
+                        num_kernels, grad_col, data_im, data_offset,
                         kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w,
                         dilation_h, dilation_w, group, group_channels,
                         height_in, width_in, height_out, width_out,
-                        offset_scale, grad_im, grad_offset, grad_mask);
+                        offset_scale, grad_im, grad_offset);
             }
         }
     }
