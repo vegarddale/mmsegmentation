@@ -186,8 +186,99 @@ class DCNv3_SW_KA(BaseModule):
         self.conv2_1._reset_parameters()
         self.conv2_2._reset_parameters()
 
+#coastline attention module
+class DCNv3_CA(BaseModule):
+    def __init__(self,
+                 core_op,
+                 channels,
+                 group,
+                 kernel_size=[5, [1, 7], [1, 11], [1, 21]], # TODO unused
+                 stride=1,
+                 pad=[2, [0, 3], [0, 5], [0, 10]], # TODO unused
+                 dilation=1,
+                 act_layer='GELU',
+                 norm_layer='LN',
+                 post_norm=False,
+                 layer_scale=None,
+                 offset_scale=1.0,
+                 dw_kernel_size=None, # for InternImage-H/G
+                 res_post_norm=False, # for InternImage-H/G
+                 center_feature_scale=False
+                ):
+    super().__init__()
+    
+    self.conv_0 = nn.Conv2d(channels,
+                                channels,
+                                5,
+                                group=channels)
+    self.conv_1_0 = nn.conv2d(channels,
+                                       channels,
+                                       1)
+    self.conv_1_1 = nn.conv2d(channels,
+                                       channels,
+                                       1,
+                                       group=channels)
+    self.conv_1_2 = self.core_op(
+                        channels=channels,
+                        kernel_size=3,
+                        stride=stride,
+                        pad=i_pad,
+                        dilation=dilation,
+                        group=channels,
+                        offset_scale=offset_scale,
+                        act_layer=act_layer,
+                        norm_layer=norm_layer,
+                        dw_kernel_size=dw_kernel_size, # for InternImage-H/G
+                        center_feature_scale=center_feature_scale
+                    )
+    self.conv_1_3 = self.core_op(
+                        channels=channels,
+                        kernel_size=tuple(1,21),
+                        stride=stride,
+                        pad=i_pad,
+                        dilation=dilation,
+                        group=channels,
+                        offset_scale=offset_scale,
+                        act_layer=act_layer,
+                        norm_layer=norm_layer,
+                        dw_kernel_size=dw_kernel_size, # for InternImage-H/G
+                        center_feature_scale=center_feature_scale
+                    )
+    self.conv_1_4 = self.core_op(
+                    channels=channels,
+                    kernel_size=tuple(21,1),
+                    stride=stride,
+                    pad=i_pad,
+                    dilation=dilation,
+                    group=channels,
+                    offset_scale=offset_scale,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    dw_kernel_size=dw_kernel_size, # for InternImage-H/G
+                    center_feature_scale=center_feature_scale
+                )
+    self.conv_2 = nn.Conv2d(channels, channels, 1)
 
+    
+    def forward(self, x):
+        u = x.clone()
+        
+        attn = self.conv_0(x)
+        
+        attn_0 = self.conv_1_0(attn)
+        
+        attn_1 = self.conv_1_1(attn)
+        
+        attn_2 = self.conv_1_2(attn)
+        
+        attn_3 = self.conv_1_3(attn)
+        attn_3 = self.conv_1_4(attn_3)
 
+        attn = attn + attn_0 + attn_1 + attn_2 + attn_3
+        x = self.conv_2(x)
+        x = attn * u
+        
+        return x
 
 
 
