@@ -6,7 +6,7 @@ import os
 import os.path as osp
 import tempfile
 import zipfile
-
+import random
 import mmcv
 import numpy as np
 from mmengine.utils import ProgressBar, mkdir_or_exist
@@ -71,26 +71,26 @@ def clip_big_image(image_path, clip_save_dir, args, to_label=False):
     ],
                      axis=1)
 
-    if to_label:
-        color_map = np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0],
-                              [255, 255, 0], [0, 255, 0], [0, 255, 255],
-                              [0, 0, 255]])
-        flatten_v = np.matmul(
-            image.reshape(-1, c),
-            np.array([2, 3, 4]).reshape(3, 1))
-        out = np.zeros_like(flatten_v)
-        for idx, class_color in enumerate(color_map):
-            value_idx = np.matmul(class_color,
-                                  np.array([2, 3, 4]).reshape(3, 1))
-            out[flatten_v == value_idx] = idx
-        image = out.reshape(h, w)
-
+    # if to_label:
+    #     color_map = np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0],
+    #                           [255, 255, 0], [0, 255, 0], [0, 255, 255],
+    #                           [0, 0, 255]])
+    #     flatten_v = np.matmul(
+    #         image.reshape(-1, c),
+    #         np.array([2, 3, 4]).reshape(3, 1))
+    #     out = np.zeros_like(flatten_v)
+    #     for idx, class_color in enumerate(color_map):
+    #         value_idx = np.matmul(class_color,
+    #                               np.array([2, 3, 4]).reshape(3, 1))
+    #         out[flatten_v == value_idx] = idx
+    #     image = out.reshape(h, w)
+    
     for box in boxes:
         start_x, start_y, end_x, end_y = box
         clipped_image = image[start_y:end_y,
                               start_x:end_x] if to_label else image[
                                   start_y:end_y, start_x:end_x, :]
-        idx_i, idx_j = osp.basename(image_path).split('_')[2:4]
+        idx_i, idx_j = osp.basename(image_path).split('_')[0:2]
         mmcv.imwrite(
             clipped_image.astype(np.uint8),
             osp.join(
@@ -98,57 +98,81 @@ def clip_big_image(image_path, clip_save_dir, args, to_label=False):
                 f'{idx_i}_{idx_j}_{start_x}_{start_y}_{end_x}_{end_y}.png'))
 
 
+def get_all_images(data_dir):
+    # data_dir = "./"
+    all_images = []
+    print(os.listdir(data_dir))
+    for img_root_dir in os.listdir(data_dir):
+        path = osp.join(data_dir, img_root_dir)
+        for img_dir in os.listdir(path):
+            if osp.isdir(osp.join(path, img_dir)):
+                for img in os.listdir(osp.join(path, img_dir)):
+                    all_images.append(img)
+    return all_images
+
+
+'''
+data.zip
+- VD_*
+- - - labels
+- - - imgfolder
+
+'''
+
+
 def main():
     args = parse_args()
-    splits = {
-        'train': [
-            '2_10', '2_11', '2_12', '3_10', '3_11', '3_12', '4_10', '4_11',
-            '4_12', '5_10', '5_11', '5_12', '6_10', '6_11', '6_12', '6_7',
-            '6_8', '6_9', '7_10', '7_11', '7_12', '7_7', '7_8', '7_9'
-        ],
-        'val': [
-            '5_15', '6_15', '6_13', '3_13', '4_14', '6_14', '5_14', '2_13',
-            '4_15', '2_14', '5_13', '4_13', '3_14', '7_13'
-        ]
-    }
+    
+    # splits = {
+    #     'train': [
+    #         '2_10', '2_11', '2_12', '3_10', '3_11', '3_12', '4_10', '4_11',
+    #         '4_12', '5_10', '5_11', '5_12', '6_10', '6_11', '6_12', '6_7',
+    #         '6_8', '6_9', '7_10', '7_11', '7_12', '7_7', '7_8', '7_9'
+    #     ],
+    #     'val': [
+    #         '5_15', '6_15', '6_13', '3_13', '4_14', '6_14', '5_14', '2_13',
+    #         '4_15', '2_14', '5_13', '4_13', '3_14', '7_13'
+    #     ]
+    # }
 
     dataset_path = args.dataset_path
-    dataset_path = "./data/Potsdam_rgb"
+    all_images = get_all_images(dataset_path)
+    print(all_images)
+    random.shuffle(all_images)
+
+    train_val_split = 0.7
+    
+    splits = {
+        'train': all_images[:int(len(all_images)*train_val_split)],
+        'val': all_images[int(len(all_images)*train_val_split):]
+    }
+    
     if args.out_dir is None:
-        out_dir = osp.join('data', 'potsdam123')
+        out_dir = osp.join('data', 'shorelines')
     else:
         out_dir = args.out_dir
-
+    
     print('Making directories...')
     mkdir_or_exist(osp.join(out_dir, 'img_dir', 'train'))
     mkdir_or_exist(osp.join(out_dir, 'img_dir', 'val'))
     mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'train'))
     mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'val'))
-
-    zipp_list = glob.glob(os.path.join(dataset_path, '*.zip'))
-    print('Find the data', zipp_list)
-
-    for zipp in zipp_list:
-        with tempfile.TemporaryDirectory(dir=args.tmp_dir) as tmp_dir:
-            zip_file = zipfile.ZipFile(zipp)
-            zip_file.extractall(tmp_dir)
-            src_path_list = glob.glob(os.path.join(tmp_dir, '*.tif'))
-            if not len(src_path_list):
-                sub_tmp_dir = os.path.join(tmp_dir, os.listdir(tmp_dir)[0])
-                src_path_list = glob.glob(os.path.join(sub_tmp_dir, '*.tif'))
-
-            prog_bar = ProgressBar(len(src_path_list))
-            for i, src_path in enumerate(src_path_list):
-                idx_i, idx_j = osp.basename(src_path).split('_')[2:4]
-                data_type = 'train' if f'{idx_i}_{idx_j}' in splits[
-                    'train'] else 'val'
-                if 'label' in src_path:
-                    dst_dir = osp.join(out_dir, 'ann_dir', data_type)
-                    clip_big_image(src_path, dst_dir, args, to_label=True)
-                else:
-                    dst_dir = osp.join(out_dir, 'img_dir', data_type)
-                    clip_big_image(src_path, dst_dir, args, to_label=False)
-                prog_bar.update()
+    
+    for img_root_dir in os.listdir(dataset_path):
+        path = osp.join(dataset_path, img_root_dir)
+        for img_dir in os.listdir(path):
+            if osp.isdir(osp.join(path, img_dir)):
+                img_dir_path = osp.join(path, img_dir)
+                for img in os.listdir(img_dir_path): # val er alle fra samme område gir jo mening siden vi går gjennom en og en mappe, nei det skal jo funke?
+                    data_type = 'train' if f'{img}' in splits[
+                        'train'] else 'val'
+                    if 'label' in img_dir:
+                        dst_dir = osp.join(out_dir, 'ann_dir', data_type)
+                        clip_big_image(osp.join(img_dir_path, img), dst_dir, args, to_label=False)
+                    else:
+                        dst_dir = osp.join(out_dir, 'img_dir', data_type)
+                        clip_big_image(osp.join(img_dir_path, img), dst_dir, args, to_label=False)
+        
 
     print('Removing the temporary files...')
 

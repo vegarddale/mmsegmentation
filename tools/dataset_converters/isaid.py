@@ -191,11 +191,11 @@ def main():
         f'train is not in {dataset_path}'
     assert os.path.exists(os.path.join(dataset_path, 'val')), \
         f'val is not in {dataset_path}'
-    assert os.path.exists(os.path.join(dataset_path, 'test')), \
-        f'test is not in {dataset_path}'
+    # assert os.path.exists(os.path.join(dataset_path, 'test')), \
+    #     f'test is not in {dataset_path}'
 
     with tempfile.TemporaryDirectory(dir=args.tmp_dir) as tmp_dir:
-        for dataset_mode in ['train', 'val', 'test']:
+        for dataset_mode in ['train', 'val']:
 
             # for dataset_mode in [ 'test']:
             print(f'Extracting  {dataset_mode}ing.zip...')

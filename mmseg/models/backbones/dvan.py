@@ -154,7 +154,7 @@ class MSCASpatialAttention(BaseModule):
             stride=1,
             pad=pad,
             dilation=1,
-            group=channels,
+            group=group,
             offset_scale=offset_scale,
             act_layer=act_layer,
             norm_layer=norm_layer,
