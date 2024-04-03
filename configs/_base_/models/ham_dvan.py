@@ -35,6 +35,29 @@ model = dict(
         align_corners=False,
         loss_decode=dict(
             type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
+        # class_weight=[0.12760639243678262,
+        #              28.919187302600395,
+        #              168.02327944485455,
+        #              10.462728195206436,
+        #              127.49776211692075,
+        #              98.5831855968028,
+        #              # 0.000001, #tmp for ice and snow until we upload the new dataset 
+        #              146.03322057043263,
+        #              406.6349510168248]),
+        # loss_cls=dict(
+        # type='mmdet.CrossEntropyLoss',
+        # use_sigmoid=False,
+        # loss_weight=1.0,
+        # reduction='mean',
+        # class_weight=[0.12760639243678262,
+        #              28.919187302600395,
+        #              168.02327944485455,
+        #              10.462728195206436,
+        #              127.49776211692075,
+        #              98.5831855968028,
+        #              0, #tmp for ice and snow until we upload the new dataset 
+        #              146.03322057043263,
+        #              406.6349510168248] + [0.1]),
         ham_kwargs=dict(
             MD_S=1,
             MD_R=16,
