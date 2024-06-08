@@ -1,7 +1,7 @@
 # checkpoint_file = "./work_dirs/weights/iter_100_75.61.pth"
 
 _base_ = [
-    '../_base_/models/mask2former_dmscan.py',
+    '../_base_/models/mask2former_dscan.py',
     '../_base_/datasets/shorelines.py',
     '../_base_/default_runtime.py',
     '../_base_/schedules/schedule_custom_160k_1e-4.py'

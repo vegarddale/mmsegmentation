@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import sys
 import ops_dcnv3.modules as dcnv3
-import ops_dcnv3_sw_server_1_version.modules as dcnv3_sw
+import ops_dcnv3_1d.modules as dcnv3_sw
 # import ops_dcnv3_vanilla_nomod.modules as dcnv3_nomod
 from mmengine.model import BaseModule
 
