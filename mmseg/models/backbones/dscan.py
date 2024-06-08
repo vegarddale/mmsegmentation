@@ -134,19 +134,8 @@ class StemConv(BaseModule):
 
 #Attention block
 class DSCASpatialAttention(BaseModule):
-    """Spatial Attention Module in Multi-Scale Convolutional Attention Module
-    (MSCA).
-
-    Args:
-        in_channels (int): The dimension of channels.
-        attention_kernel_sizes (list): The size of attention
-            kernel. Defaults: [5, [1, 7], [1, 11], [1, 21]].
-        attention_kernel_paddings (list): The number of
-            corresponding padding value in attention module.
-            Defaults: [2, [0, 3], [0, 5], [0, 10]].
-        act_cfg (dict): Config dict for activation layer in block.
-            Default: dict(type='GELU').
-    """
+  
+    """ Deformable Strip Convolutional Attention module(DSCA)."""
 
     def __init__(self,
                  core_op,
@@ -195,32 +184,8 @@ class DSCASpatialAttention(BaseModule):
 
 # entire block
 class DSCABlock(BaseModule):
-    """Basic Multi-Scale Convolutional Attention Block. It leverage the large-
-    kernel attention (LKA) mechanism to build both channel and spatial
-    attention. In each branch, it uses two depth-wise strip convolutions to
-    approximate standard depth-wise convolutions with large kernels. The kernel
-    size for each branch is set to 7, 11, and 21, respectively.
-
-    Args:
-        channels (int): The dimension of channels.
-        attention_kernel_sizes (list): The size of attention
-            kernel. Defaults: [5, [1, 7], [1, 11], [1, 21]].
-        attention_kernel_paddings (list): The number of
-            corresponding padding value in attention module.
-            Defaults: [2, [0, 3], [0, 5], [0, 10]].
-        mlp_ratio (float): The ratio of multiple input dimension to
-            calculate hidden feature in MLP layer. Defaults: 4.0.
-        drop (float): The number of dropout rate in MLP block.
-            Defaults: 0.0.
-        drop_path (float): The ratio of drop paths.
-            Defaults: 0.0.
-        act_cfg (dict): Config dict for activation layer in block.
-            Default: dict(type='GELU').
-        norm_cfg (dict): Config dict for normalization layer.
-            Defaults: dict(type='SyncBN', requires_grad=True).
-
-    Input dimensions: (B, H*W, C)
-    Output dimensions: (B, H*W, C)
+    """Deformable Strip Convolution Attention block. 
+       Utilizes the deformable large kernel approximation module.
     """
 
     def __init__(self,
@@ -253,7 +218,7 @@ class DSCABlock(BaseModule):
                  norm_layer=norm_layer,
                  offset_scale=offset_scale,
                  dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-                 center_feature_scale=center_feature_scale, # } disse trengs for dcnv3
+                 center_feature_scale=center_feature_scale,
                  act_cfg=act_cfg)
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
@@ -330,38 +295,6 @@ class OverlapPatchEmbed(BaseModule):
 
 @MODELS.register_module()
 class DSCAN(BaseModule):
-    """SegNeXt Multi-Scale Convolutional Attention Network (MCSAN) backbone.
-
-    This backbone is the implementation of `SegNeXt: Rethinking
-    Convolutional Attention Design for Semantic
-    Segmentation <https://arxiv.org/abs/2209.08575>`_.
-    Inspiration from https://github.com/visual-attention-network/segnext.
-
-    Args:
-        in_channels (int): The number of input channels. Defaults: 3.
-        embed_dims (list[int]): Embedding dimension.
-            Defaults: [64, 128, 256, 512].
-        mlp_ratios (list[int]): Ratio of mlp hidden dim to embedding dim.
-            Defaults: [4, 4, 4, 4].
-        drop_rate (float): Dropout rate. Defaults: 0.
-        drop_path_rate (float): Stochastic depth rate. Defaults: 0.
-        depths (list[int]): Depths of each Swin Transformer stage.
-            Default: [3, 4, 6, 3].
-        num_stages (int): MSCAN stages. Default: 4.
-        attention_kernel_sizes (list): Size of attention kernel in
-            Attention Module (Figure 2(b) of original paper).
-            Defaults: [5, [1, 7], [1, 11], [1, 21]].
-        attention_kernel_paddings (list): Size of attention paddings
-            in Attention Module (Figure 2(b) of original paper).
-            Defaults: [2, [0, 3], [0, 5], [0, 10]].
-        norm_cfg (dict): Config of norm layers.
-            Defaults: dict(type='SyncBN', requires_grad=True).
-        pretrained (str, optional): model pretrained path.
-            Default: None.
-        init_cfg (dict or list[dict], optional): Initialization config dict.
-            Default: None.
-    """
-
     def __init__(self,
                  core_op="DCNv3",
                  attn_module="DCNv3KA",
