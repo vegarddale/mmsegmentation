@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/models/ham_dvan.py',
+    '../_base_/models/ham_dscan.py',
     '../_base_/datasets/shorelines.py',
     '../_base_/default_runtime.py',
     '../_base_/schedules/schedule_pretrained_160k.py'

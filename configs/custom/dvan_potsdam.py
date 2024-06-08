@@ -2,7 +2,7 @@
 #checkpoint_file = "./work_dirs/dmscan_potsdam/20240322_225633/iter_160000.pth"
 
 _base_ = [
-    '../_base_/models/ham_dvan.py',
+    '../_base_/models/ham_dscan.py',
     '../_base_/datasets/potsdam.py',
     '../_base_/default_runtime.py',
     '../_base_/schedules/schedule_custom_160k_1e-4.py'
