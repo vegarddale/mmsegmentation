@@ -47,10 +47,10 @@ def parse_args():
 def inference(args: argparse.Namespace, logger: MMLogger) -> dict:
     config_name = Path(args.config)
 
-    if not config_name.exists():
-        logger.error(f'Config file {config_name} does not exist')
+    # if not config_name.exists():
+    #     logger.error(f'Config file {config_name} does not exist')
 
-    cfg: Config = Config.fromfile(config_name)
+    cfg: Config = Config.fromfile("./configs/custom/dmscan_isaid.py")
     cfg.work_dir = tempfile.TemporaryDirectory().name
     cfg.log_level = 'WARN'
     if args.cfg_options is not None:
@@ -87,7 +87,7 @@ def inference(args: argparse.Namespace, logger: MMLogger) -> dict:
     outputs = get_model_complexity_info(
         model,
         input_shape,
-        inputs=data['inputs'],
+        # inputs=data['inputs'],
         show_table=False,
         show_arch=False)
     result['flops'] = _format_size(outputs['flops'])

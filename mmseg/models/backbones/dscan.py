@@ -1,4 +1,7 @@
-
+# Copyright (c) OpenMMLab. All rights reserved.
+# Originally from https://github.com/visual-attention-network/segnext
+# Licensed under the Apache License, Version 2.0 (the "License")
+############# Adapted from mmseg/models/backbones/mscan.py #############
 import math
 import warnings
 
@@ -9,12 +12,23 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import (constant_init, normal_init,
                                         trunc_normal_init)
-
 from mmseg.registry import MODELS
 
 import sys
 sys.path.append("./mmseg/models")
 from utils import dcnv3_ka
+
+
+
+class ToChannelsLast(nn.Module):
+    def forward(self, x):
+        # Convert from N, C, H, W -> N, H, W, C
+        return x.permute(0, 2, 3, 1)
+
+class ToChannelsFirst(nn.Module):
+    def forward(self, x):
+        # Convert from N, H, W, C -> N, C, H, W
+        return x.permute(0, 3, 1, 2)
 
 class Mlp(BaseModule):
     """Multi Layer Perceptron (MLP) Module.
@@ -96,7 +110,9 @@ class StemConv(BaseModule):
                 kernel_size=(3, 3),
                 stride=(2, 2),
                 padding=(1, 1)),
+            ToChannelsLast(),
             build_norm_layer(norm_cfg, out_channels // 2)[1],
+            ToChannelsFirst(),
             build_activation_layer(act_cfg),
             nn.Conv2d(
                 out_channels // 2,
@@ -104,7 +120,9 @@ class StemConv(BaseModule):
                 kernel_size=(3, 3),
                 stride=(2, 2),
                 padding=(1, 1)),
+            ToChannelsLast(),
             build_norm_layer(norm_cfg, out_channels)[1],
+            ToChannelsFirst(),
         )
 
     def forward(self, x):
@@ -115,7 +133,7 @@ class StemConv(BaseModule):
         return x, H, W
 
 #Attention block
-class MSCASpatialAttention(BaseModule):
+class DSCASpatialAttention(BaseModule):
     """Spatial Attention Module in Multi-Scale Convolutional Attention Module
     (MSCA).
 
@@ -154,7 +172,7 @@ class MSCASpatialAttention(BaseModule):
             stride=1,
             pad=pad,
             dilation=1,
-            group=channels,
+            group=group,
             offset_scale=offset_scale,
             act_layer=act_layer,
             norm_layer=norm_layer,
@@ -172,10 +190,11 @@ class MSCASpatialAttention(BaseModule):
         x = self.attn(x)
         x = self.proj_2(x)
         x = x + shorcut
+        x = x.permute(0,2,3,1)
         return x
 
 # entire block
-class MSCABlock(BaseModule):
+class DSCABlock(BaseModule):
     """Basic Multi-Scale Convolutional Attention Block. It leverage the large-
     kernel attention (LKA) mechanism to build both channel and spatial
     attention. In each branch, it uses two depth-wise strip convolutions to
@@ -223,7 +242,7 @@ class MSCABlock(BaseModule):
                  norm_cfg=dict(type='SyncBN', requires_grad=True)):
         super().__init__()
         self.norm1 = build_norm_layer(norm_cfg, channels)[1]
-        self.attn = MSCASpatialAttention(
+        self.attn = DSCASpatialAttention(
                  core_op=core_op,
                  attn_module=attn_module,
                  channels=channels,
@@ -257,11 +276,11 @@ class MSCABlock(BaseModule):
         B, N, C = x.shape
         x = x.permute(0, 2, 1).view(B, C, H, W)
         x = x + self.drop_path(
-            self.layer_scale_1.unsqueeze(-1).unsqueeze(-1) *
-            self.attn(self.norm1(x)))
+            self.layer_scale_1.unsqueeze(-1).unsqueeze(-1) * ToChannelsFirst()(
+            self.norm1(self.attn(x))))
         x = x + self.drop_path(
-            self.layer_scale_2.unsqueeze(-1).unsqueeze(-1) *
-            self.mlp(self.norm2(x)))
+            self.layer_scale_2.unsqueeze(-1).unsqueeze(-1) * ToChannelsFirst()(
+            self.norm2(ToChannelsLast()(self.mlp(x)))))
         x = x.view(B, C, N).permute(0, 2, 1)
         return x
 
@@ -302,13 +321,15 @@ class OverlapPatchEmbed(BaseModule):
 
         x = self.proj(x)
         _, _, H, W = x.shape
+        x = ToChannelsLast()(x)
         x = self.norm(x)
+        x = ToChannelsFirst()(x)
         x = x.flatten(2).transpose(1, 2)
     
         return x, H, W
 
 @MODELS.register_module()
-class DVAN(BaseModule):
+class DSCAN(BaseModule):
     """SegNeXt Multi-Scale Convolutional Attention Network (MCSAN) backbone.
 
     This backbone is the implementation of `SegNeXt: Rethinking
@@ -395,7 +416,7 @@ class DVAN(BaseModule):
                     embed_dim=embed_dims[i],
                     norm_cfg=norm_cfg)
             block = nn.ModuleList([
-                MSCABlock(
+                DSCABlock(
                     core_op=core_op,
                     attn_module=getattr(dcnv3_ka, attn_module),
                     group=groups[i],

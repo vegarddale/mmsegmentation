@@ -8,11 +8,11 @@ import warnings
 import torch
 import torch.nn as nn
 import sys
-sys.path.append("./ops_dcnv3")
-import modules as dcnv3
+import ops_dcnv3.modules as dcnv3
+import ops_dcnv3_sw_server_1_version.modules as dcnv3_sw
+# import ops_dcnv3_vanilla_nomod.modules as dcnv3_nomod
 from mmengine.model import BaseModule
 
-# husk att de gjør kernel decomposition inne i dcvn3, dette burde vi endre på i strip wise siden det løser samme problemet
 class DCNv3KA(BaseModule):
     def __init__(self,
                  core_op,
@@ -34,25 +34,24 @@ class DCNv3KA(BaseModule):
         self.channels = channels
         self.core_op = getattr(dcnv3, core_op)
         self.output_proj = nn.Linear(channels, channels)
-        # self.dw_dcn = nn.Conv2d(
-        #     channels,
-        #     channels,
-        #     kernel_size=tuple((kernel_size[0], kernel_size[0])),
-        #     padding=tuple((pad[0], pad[0])),
-        #     groups=channels)
-        self.dw_dcn = self.core_op( TODO her vil vi teste å bytte dw_dcn med en vanlig dw convolution, det vi vil teste med det er large deformable kernel attention(disse modellene burde være
-                                                                                                                                                                    små nok i base att vi kan øke størrelsen, hvis ikke er de for store som base)
-            channels=channels,
+        self.dw_dcn = nn.Conv2d(
+            channels,
+            channels,
             kernel_size=tuple((kernel_size[0], kernel_size[0])),
-            stride=1,
-            pad=tuple((pad[0], pad[0])),
-            dilation=1,
-            group=channels,
-            offset_scale=offset_scale,
-            act_layer=act_layer,
-            norm_layer=norm_layer,
-            dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-            center_feature_scale=center_feature_scale)
+            padding=tuple((pad[0], pad[0])),
+            groups=channels)
+        # self.dw_dcn = self.core_op(
+        #     channels=channels,
+        #     kernel_size=tuple((kernel_size[0], kernel_size[0])),
+        #     stride=1,
+        #     pad=tuple((pad[0], pad[0])),
+        #     dilation=1,
+        #     group=group,
+        #     offset_scale=offset_scale,
+        #     act_layer=act_layer,
+        #     norm_layer=norm_layer,
+        #     dw_kernel_size=dw_kernel_size, # for InternImage-H/G
+        #     center_feature_scale=center_feature_scale)
         
         self.dw_d_dcn = self.core_op(
             channels=channels,
@@ -71,17 +70,17 @@ class DCNv3KA(BaseModule):
     def forward(self, x):
         u = x.clone()
         u = u.permute(0,3,1,2)
-        # TODO add a dw 1x1 that is paralell with the attn(similar to v3+)(will be used to mimic channel attention)
-        # x = x.permute(0,3,1,2)
+        
+        x = x.permute(0,3,1,2)
         x = self.dw_dcn(x)
-        # x = x.permute(0,2,3,1)
+        x = x.permute(0,2,3,1)
         x = self.dw_d_dcn(x)
         x = self.output_proj(x)
         x = x.permute(0,3,1,2)
         return x*u
-        
+    
     def _reset_parameters(self):
-        self.dw_dcn._reset_parameters()
+        # self.dw_dcn._reset_parameters()
         self.dw_d_dcn._reset_parameters()
         
 
@@ -116,7 +115,7 @@ class DCNv3_SW_KA(BaseModule):
                  strip_conv=1
                 ):
         super().__init__()
-        self.core_op = getattr(dcnv3, core_op)
+        self.core_op = getattr(dcnv3_sw, core_op)
         self.conv0 = nn.Conv2d(
             channels,
             channels,
@@ -143,8 +142,8 @@ class DCNv3_SW_KA(BaseModule):
                         act_layer=act_layer,
                         norm_layer=norm_layer,
                         dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-                        center_feature_scale=center_feature_scale,
-                        strip_conv=strip_conv
+                        center_feature_scale=center_feature_scale
+                        # strip_conv=strip_conv
                     ))
         self.conv3 = nn.Conv2d(channels, channels, 1)
 
@@ -156,24 +155,18 @@ class DCNv3_SW_KA(BaseModule):
         attn = self.conv0(x)
         attn = attn.permute(0,2,3,1).contiguous()
         
-        # Multi-Scale Feature extraction
+        # Deformable Large Kernel approximation
         attn_0 = self.conv0_1(attn)
         attn_0 = self.conv0_2(attn_0)
         
-        attn_1 = self.conv1_1(attn)
-        attn_1 = self.conv1_2(attn_1)
-        
-        attn_2 = self.conv2_1(attn)
-        attn_2 = self.conv2_2(attn_2)
-
-        attn = attn + attn_0 + attn_1 + attn_2
+        attn = attn + attn_0
         
         # Channel Mixing
         attn = attn.permute(0,3,1,2).contiguous()
         attn = self.conv3(attn)
+        
         # Convolutional Attention
         x = attn * u
-
         return x
 
     
@@ -181,104 +174,10 @@ class DCNv3_SW_KA(BaseModule):
         
         self.conv0_1._reset_parameters()
         self.conv0_2._reset_parameters()
-        self.conv1_1._reset_parameters()
-        self.conv1_2._reset_parameters()
-        self.conv2_1._reset_parameters()
-        self.conv2_2._reset_parameters()
-
-#coastline attention module
-class DCNv3_CA(BaseModule):
-    def __init__(self,
-                 core_op,
-                 channels,
-                 group,
-                 kernel_size=[5, [1, 7], [1, 11], [1, 21]], # TODO unused
-                 stride=1,
-                 pad=[2, [0, 3], [0, 5], [0, 10]], # TODO unused
-                 dilation=1,
-                 act_layer='GELU',
-                 norm_layer='LN',
-                 post_norm=False,
-                 layer_scale=None,
-                 offset_scale=1.0,
-                 dw_kernel_size=None, # for InternImage-H/G
-                 res_post_norm=False, # for InternImage-H/G
-                 center_feature_scale=False
-                ):
-    super().__init__()
-    
-    self.conv_0 = nn.Conv2d(channels,
-                                channels,
-                                5,
-                                group=channels)
-    self.conv_1_0 = nn.conv2d(channels,
-                                       channels,
-                                       1)
-    self.conv_1_1 = nn.conv2d(channels,
-                                       channels,
-                                       1,
-                                       group=channels)
-    self.conv_1_2 = self.core_op(
-                        channels=channels,
-                        kernel_size=3,
-                        stride=stride,
-                        pad=i_pad,
-                        dilation=dilation,
-                        group=channels,
-                        offset_scale=offset_scale,
-                        act_layer=act_layer,
-                        norm_layer=norm_layer,
-                        dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-                        center_feature_scale=center_feature_scale
-                    )
-    self.conv_1_3 = self.core_op(
-                        channels=channels,
-                        kernel_size=tuple(1,21),
-                        stride=stride,
-                        pad=i_pad,
-                        dilation=dilation,
-                        group=channels,
-                        offset_scale=offset_scale,
-                        act_layer=act_layer,
-                        norm_layer=norm_layer,
-                        dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-                        center_feature_scale=center_feature_scale
-                    )
-    self.conv_1_4 = self.core_op(
-                    channels=channels,
-                    kernel_size=tuple(21,1),
-                    stride=stride,
-                    pad=i_pad,
-                    dilation=dilation,
-                    group=channels,
-                    offset_scale=offset_scale,
-                    act_layer=act_layer,
-                    norm_layer=norm_layer,
-                    dw_kernel_size=dw_kernel_size, # for InternImage-H/G
-                    center_feature_scale=center_feature_scale
-                )
-    self.conv_2 = nn.Conv2d(channels, channels, 1)
-
-    
-    def forward(self, x):
-        u = x.clone()
-        
-        attn = self.conv_0(x)
-        
-        attn_0 = self.conv_1_0(attn)
-        
-        attn_1 = self.conv_1_1(attn)
-        
-        attn_2 = self.conv_1_2(attn)
-        
-        attn_3 = self.conv_1_3(attn)
-        attn_3 = self.conv_1_4(attn_3)
-
-        attn = attn + attn_0 + attn_1 + attn_2 + attn_3
-        x = self.conv_2(x)
-        x = attn * u
-        
-        return x
+        #self.conv1_1._reset_parameters()
+        #self.conv1_2._reset_parameters()
+        #self.conv2_1._reset_parameters()
+        #self.conv2_2._reset_parameters()
 
 
 

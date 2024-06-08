@@ -48,8 +48,10 @@ def iSAID_convert_from_color(arr_3d, palette=iSAID_invert_palette):
 
 def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
     img = np.asarray(Image.open(src_path).convert('RGB'))
-
+    
     img_H, img_W, _ = img.shape
+
+    overlap_H, overlap_W = overlap
 
     if img_H < patch_H and img_W > patch_W:
 
@@ -69,8 +71,9 @@ def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
 
         img_H, img_W, _ = img.shape
 
-    for x in range(0, img_W, patch_W - overlap):
-        for y in range(0, img_H, patch_H - overlap):
+    for x in range(0, img_W, patch_W - overlap_W):
+        for y in range(0, img_H, patch_H - overlap_H):
+
             x_str = x
             x_end = x + patch_W
             if x_end > img_W:
@@ -99,6 +102,7 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
     label = iSAID_convert_from_color(label)
     img_H, img_W = label.shape
 
+    overlap_H, overlap_W = overlap
     if img_H < patch_H and img_W > patch_W:
 
         label = mmcv.impad(label, shape=(patch_H, img_W), pad_val=255)
@@ -118,8 +122,9 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
         img_H = patch_H
         img_W = patch_W
 
-    for x in range(0, img_W, patch_W - overlap):
-        for y in range(0, img_H, patch_H - overlap):
+    for x in range(0, img_W, patch_W - overlap_W):
+        for y in range(0, img_H, patch_H - overlap_H):
+            
             x_str = x
             x_end = x + patch_W
             if x_end > img_W:
@@ -134,12 +139,13 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
                 y_end = img_H
 
             lab_patch = label[y_str:y_end, x_str:x_end]
-            lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
-
+            # lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
+            
             image = osp.basename(src_path).split('.')[0].split(
                 '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
                     x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
-            lab_patch.save(osp.join(out_dir, 'ann_dir', mode, str(image)))
+            mmcv.imwrite(lab_patch.astype(np.uint8), osp.join(out_dir, 'ann_dir', mode, str(image)))
+            # lab_patch.save(osp.join(out_dir, 'ann_dir', mode, str(image)))
 
 
 def parse_args():
@@ -160,16 +166,17 @@ def parse_args():
         type=int,
         help='Height of the cropped image patch')
     parser.add_argument(
-        '--overlap_area', default=384, type=int, help='Overlap area')
+        '--overlap_area', nargs=2, default=(384,384), type=int, help='Overlap area')
     args = parser.parse_args()
     return args
 
 
 def main():
     args = parse_args()
-    dataset_path = args.dataset_path
+    #dataset_path = args.dataset_path
+    dataset_path = "./data/iSAID"
     # image patch width and height
-    patch_H, patch_W = args.patch_width, args.patch_height
+    patch_H, patch_W = args.patch_height, args.patch_width
 
     overlap = args.overlap_area  # overlap area
 
@@ -191,11 +198,11 @@ def main():
         f'train is not in {dataset_path}'
     assert os.path.exists(os.path.join(dataset_path, 'val')), \
         f'val is not in {dataset_path}'
-    assert os.path.exists(os.path.join(dataset_path, 'test')), \
-        f'test is not in {dataset_path}'
+    # assert os.path.exists(os.path.join(dataset_path, 'test')), \
+    #     f'test is not in {dataset_path}'
 
     with tempfile.TemporaryDirectory(dir=args.tmp_dir) as tmp_dir:
-        for dataset_mode in ['train', 'val', 'test']:
+        for dataset_mode in ['train', 'val']:
 
             # for dataset_mode in [ 'test']:
             print(f'Extracting  {dataset_mode}ing.zip...')

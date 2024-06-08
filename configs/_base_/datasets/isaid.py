@@ -7,14 +7,14 @@ This crop_size setting is followed by the implementation of
 Segmentation <https://arxiv.org/pdf/2103.06564.pdf>`_.
 """
 
-crop_size = (896, 896)
+crop_size = (768, 896)
 
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
     dict(
         type='RandomResize',
-        scale=(896, 896),
+        scale=(768, 896),
         ratio_range=(0.5, 2.0),
         keep_ratio=True),
     dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
@@ -24,7 +24,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(896, 896), keep_ratio=True),
+    dict(type='Resize', scale=(768, 896), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

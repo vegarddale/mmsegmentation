@@ -24,7 +24,7 @@ from .twins import PCPVT, SVT
 from .unet import UNet
 from .vit import VisionTransformer
 from .vpd import VPD
-from .dvan import DVAN
+from .dscan import DSCAN
 from .van import VAN
 
 __all__ = [
@@ -33,5 +33,5 @@ __all__ = [
     'VisionTransformer', 'SwinTransformer', 'MixVisionTransformer',
     'BiSeNetV1', 'BiSeNetV2', 'ICNet', 'TIMMBackbone', 'ERFNet', 'PCPVT',
     'SVT', 'STDCNet', 'STDCContextPathNet', 'BEiT', 'MAE', 'PIDNet', 'MSCAN',
-    'DDRNet', 'VPD', 'DVAN', 'VAN'
+    'DDRNet', 'VPD', 'DSCAN', 'VAN'
 ]

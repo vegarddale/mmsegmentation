@@ -61,7 +61,7 @@ at::Tensor dcnv3_cuda_forward(const at::Tensor &input, const at::Tensor &offset,
                                  width_out, group * group_channels});
     auto per_input_size = height_in * width_in * group * group_channels;
     auto per_offset_size =
-        height_out * width_out * group * kernel_h * kernel_w;
+        height_out * width_out * group * kernel_h * kernel_w * 2;
     auto per_mask_size = height_out * width_out * group * kernel_h * kernel_w;
     for (int n = 0; n < batch / im2col_step_; ++n) {
         auto columns = output_n.select(0, n);
@@ -135,7 +135,7 @@ dcnv3_cuda_backward(const at::Tensor &input, const at::Tensor &offset,
     const int batch_n = im2col_step_;
     auto per_input_size = height_in * width_in * group * group_channels;
     auto per_offset_size =
-        height_out * width_out * group * kernel_h * kernel_w;
+        height_out * width_out * group * kernel_h * kernel_w * 2;
     auto per_mask_size = height_out * width_out * group * kernel_h * kernel_w;
     auto grad_output_n =
         grad_output.view({batch / im2col_step_, batch_n, height_out * width_out,

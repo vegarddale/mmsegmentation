@@ -113,8 +113,9 @@ def main():
     }
 
     dataset_path = args.dataset_path
+    dataset_path = "./data/Potsdam_rgb"
     if args.out_dir is None:
-        out_dir = osp.join('data', 'potsdam')
+        out_dir = osp.join('data', 'potsdam123')
     else:
         out_dir = args.out_dir
 
