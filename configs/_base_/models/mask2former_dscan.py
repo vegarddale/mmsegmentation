@@ -1,5 +1,6 @@
 # model settings
 # checkpoint_file = 'https://download.openmmlab.com/mmsegmentation/v0.5/pretrain/segnext/mscan_t_20230227-119e8c9f.pth'  # noqa
+# pretrained = './work_dirs/weights/epoch_69.pth'
 ham_norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
 data_preprocessor = dict(
     type='SegDataPreProcessor',
@@ -15,7 +16,7 @@ model = dict(
     data_preprocessor=data_preprocessor,
     pretrained=None,
        backbone=dict(
-        type='DVAN',
+        type='DSCAN',
         embed_dims=[32, 64, 160, 256],
         mlp_ratios=[8, 8, 4, 4],
         drop_rate=0.0,
@@ -23,6 +24,10 @@ model = dict(
         depths=[3, 3, 5, 2],
         act_cfg=dict(type='GELU'),
         norm_cfg=dict(type='BN', requires_grad=True),
+        # init_cfg=dict(
+        # type='Pretrained',
+        # checkpoint=pretrained,
+        # prefix='backbone.'),
         channel_attention=True),
     decode_head=dict(
         type='Mask2FormerHead',
@@ -132,4 +137,3 @@ model = dict(
             sampler=dict(type='mmdet.MaskPseudoSampler'))),
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
-

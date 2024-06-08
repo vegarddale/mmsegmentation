@@ -10,7 +10,8 @@ import random
 import mmcv
 import numpy as np
 from mmengine.utils import ProgressBar, mkdir_or_exist
-
+from collections import Counter
+import cv2
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -22,29 +23,94 @@ def parse_args():
         '--clip_size',
         type=int,
         help='clipped size of image after preparation',
-        default=512)
+        default=3000)
     parser.add_argument(
         '--stride_size',
         type=int,
         help='stride of clipping original images',
-        default=256)
+        default=2000)
     args = parser.parse_args()
     return args
 
 
+# oversample images containing the most underrepresented classes
+# channels must equal 3 and we need to crop both the image and the labels
+# and we need to make sure the image name is unique
+def oversample(label_dir, seg_map_path, out_dir, data_type):
+    
+    # Getting the parent directory
+    parent_directory = osp.dirname(label_dir)
+    img_dir = None
+    dirs = os.listdir(parent_directory)
+    for dir in dirs:
+        if dir != 'labels' and not dir.startswith('VD') and not dir.startswith('.'):
+            img_dir = dir
+    
+    
+    
+    seg_map = mmcv.imread(osp.join(label_dir, seg_map_path), flag='grayscale')
+    image =  mmcv.imread(osp.join(f"{parent_directory}/{img_dir}", seg_map_path))
+    
+    underrepresented_classes = [2,4,5,6,7]
+    if not np.isin(seg_map, underrepresented_classes).any():
+        print("not in underrepresented classes")
+        return
+    print(seg_map_path)
+    present_classes = np.unique(seg_map[np.isin(seg_map, underrepresented_classes)])
+    
+    for cls in present_classes:
+        # Find indices where image contains underrepresented classes
+        class_indices = np.where(seg_map == cls)
+        tmp_image = np.zeros((seg_map.shape[0], seg_map.shape[1]), dtype=np.uint8)
+        tmp_image[class_indices] = 255
+
+        # locate different instances of objects
+        contours, _ = cv2.findContours(tmp_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            top_left_x, top_left_y, w, h = cv2.boundingRect(contour)
+            
+            for dx, dy in [(-500, -500), (500, -500), (-500, 500), (500, 500)]:
+                crop_x1 = max(top_left_x + dx, 0)
+                crop_y1 = max(top_left_y + dy, 0)
+                if crop_x1 > seg_map.shape[1] - 3000:
+                    crop_x1 = seg_map.shape[1] - 3000
+                if crop_y1 > seg_map.shape[0] - 3000:
+                    crop_y1 = seg_map.shape[0] - 3000
+                crop_x2 = min(crop_x1 + 3000, seg_map.shape[1])
+                crop_y2 = min(crop_y1 + 3000, seg_map.shape[0])
+                crop_seg_map = seg_map[crop_y1:crop_y2, crop_x1:crop_x2]
+                crop_image = image[crop_y1:crop_y2, crop_x1:crop_x2]#TODO
+                assert crop_seg_map.shape == (3000, 3000), "cropped segmentation map does not match output size" 
+                mmcv.imwrite(
+                crop_seg_map.astype(np.uint8),
+                osp.join(
+                    osp.join(out_dir, 'ann_dir_2', data_type),
+                    f'{dx}_{dy}_{seg_map_path}'))
+                mmcv.imwrite(
+                crop_image.astype(np.uint8),
+                osp.join(
+                    osp.join(out_dir, 'img_dir_2', data_type),
+                    f'{dx}_{dy}_{seg_map_path}'))
+
+
+
 def clip_big_image(image_path, clip_save_dir, args, to_label=False):
-    # Original image of Potsdam dataset is very large, thus pre-processing
-    # of them is adopted. Given fixed clip size and stride size to generate
-    # clipped image, the intersection　of width and height is determined.
-    # For example, given one 5120 x 5120 original image, the clip size is
-    # 512 and stride size is 256, thus it would generate 20x20 = 400 images
-    # whose size are all 512x512.
-    image = mmcv.imread(image_path)
 
-    h, w, c = image.shape
-    clip_size = args.clip_size
+    image = None
+    h = 0
+    w = 0
+    c = 1
+    if to_label:
+        image = mmcv.imread(image_path, flag='grayscale')
+        h, w = image.shape
+    else:
+        image = mmcv.imread(image_path)
+        h, w, c = image.shape
+    
     stride_size = args.stride_size
-
+    clip_size = args.clip_size
+    
     num_rows = math.ceil((h - clip_size) / stride_size) if math.ceil(
         (h - clip_size) /
         stride_size) * stride_size + clip_size >= h else math.ceil(
@@ -72,9 +138,17 @@ def clip_big_image(image_path, clip_save_dir, args, to_label=False):
                      axis=1)
 
     # if to_label:
-    #     color_map = np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0],
-    #                           [255, 255, 0], [0, 255, 0], [0, 255, 255],
-    #                           [0, 0, 255]])
+    #     color_map = np.array([
+    #                         [0,0,0],
+    #                         [255, 0, 0],
+    #                         [255, 255, 102],
+    #                         [153, 102, 51],
+    #                         [204, 204, 204],
+    #                         [102, 102, 102],
+    #                         [255, 255, 255],
+    #                         [204, 153, 102],
+    #                         [51, 153, 102]])
+
     #     flatten_v = np.matmul(
     #         image.reshape(-1, c),
     #         np.array([2, 3, 4]).reshape(3, 1))
@@ -84,30 +158,34 @@ def clip_big_image(image_path, clip_save_dir, args, to_label=False):
     #                               np.array([2, 3, 4]).reshape(3, 1))
     #         out[flatten_v == value_idx] = idx
     #     image = out.reshape(h, w)
-    
+
     for box in boxes:
         start_x, start_y, end_x, end_y = box
         clipped_image = image[start_y:end_y,
                               start_x:end_x] if to_label else image[
                                   start_y:end_y, start_x:end_x, :]
-        idx_i, idx_j = osp.basename(image_path).split('_')[0:2]
+        idx = osp.basename(image_path).split('.')[0]
         mmcv.imwrite(
             clipped_image.astype(np.uint8),
             osp.join(
                 clip_save_dir,
-                f'{idx_i}_{idx_j}_{start_x}_{start_y}_{end_x}_{end_y}.png'))
+                f'{idx}_{start_x}_{start_y}_{end_x}_{end_y}.png'))
+    
 
 
 def get_all_images(data_dir):
-    # data_dir = "./"
+
     all_images = []
-    print(os.listdir(data_dir))
+    data_dir = "./data/shorelines/all_images"
     for img_root_dir in os.listdir(data_dir):
         path = osp.join(data_dir, img_root_dir)
         for img_dir in os.listdir(path):
+            if(img_dir=="labels"):
+                continue
             if osp.isdir(osp.join(path, img_dir)):
                 for img in os.listdir(osp.join(path, img_dir)):
-                    all_images.append(img)
+                    if img.endswith("png"):
+                        all_images.append(img)
     return all_images
 
 
@@ -135,11 +213,12 @@ def main():
     #     ]
     # }
 
-    dataset_path = args.dataset_path
+    # dataset_path = args.dataset_path
+    dataset_path = "./data/shorelines/all_images"
     all_images = get_all_images(dataset_path)
-    print(all_images)
+    print(len(all_images))
     random.shuffle(all_images)
-
+    print(len(all_images))
     train_val_split = 0.7
     
     splits = {
@@ -147,30 +226,46 @@ def main():
         'val': all_images[int(len(all_images)*train_val_split):]
     }
     
+    
+    train_list = splits['train']
+    element_counts = Counter(train_list)
+    duplicates = [element for element, count in element_counts.items() if count > 1]
+    print(duplicates)
+    assert len(duplicates) == 0, "Found duplicate images, stopping..."
+
+    print("nof train images: ", len(splits['train']))
+    print("nof val images: ", len(splits['val']))
+    
     if args.out_dir is None:
         out_dir = osp.join('data', 'shorelines')
     else:
         out_dir = args.out_dir
     
     print('Making directories...')
-    mkdir_or_exist(osp.join(out_dir, 'img_dir', 'train'))
-    mkdir_or_exist(osp.join(out_dir, 'img_dir', 'val'))
-    mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'train'))
-    mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'val'))
+    mkdir_or_exist(osp.join(out_dir, 'img_dir_2', 'train'))
+    mkdir_or_exist(osp.join(out_dir, 'img_dir_2', 'val'))
+    mkdir_or_exist(osp.join(out_dir, 'ann_dir_2', 'train'))
+    mkdir_or_exist(osp.join(out_dir, 'ann_dir_2', 'val'))
     
     for img_root_dir in os.listdir(dataset_path):
         path = osp.join(dataset_path, img_root_dir)
         for img_dir in os.listdir(path):
             if osp.isdir(osp.join(path, img_dir)):
                 img_dir_path = osp.join(path, img_dir)
-                for img in os.listdir(img_dir_path): # val er alle fra samme område gir jo mening siden vi går gjennom en og en mappe, nei det skal jo funke?
-                    data_type = 'train' if f'{img}' in splits[
-                        'train'] else 'val'
-                    if 'label' in img_dir:
-                        dst_dir = osp.join(out_dir, 'ann_dir', data_type)
-                        clip_big_image(osp.join(img_dir_path, img), dst_dir, args, to_label=False)
+                for img in os.listdir(img_dir_path):
+                    if f'{img}' in splits['train']:
+                        data_type = 'train'
+                    elif f'{img}' in splits['val']:
+                        data_type = 'val'
                     else:
-                        dst_dir = osp.join(out_dir, 'img_dir', data_type)
+                        print(f'{img}')
+                        continue
+                    if 'label' in img_dir:
+                        dst_dir = osp.join(out_dir, 'ann_dir_2', data_type)
+                        clip_big_image(osp.join(img_dir_path, img), dst_dir, args, to_label=True)
+                        oversample(img_dir_path, img, out_dir, data_type)
+                    else:
+                        dst_dir = osp.join(out_dir, 'img_dir_2', data_type)
                         clip_big_image(osp.join(img_dir_path, img), dst_dir, args, to_label=False)
         
 

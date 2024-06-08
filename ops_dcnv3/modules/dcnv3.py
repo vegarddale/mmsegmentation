@@ -189,7 +189,7 @@ class DCNv3_pytorch(nn.Module):
         :return output                     (N, H, W, C)
         """
         N, H, W, _ = input.shape
-
+        
         x = self.input_proj(input)
         x_proj = x
 
@@ -288,7 +288,7 @@ class DCNv3(nn.Module):
             build_act_layer(act_layer))
         self.offset = nn.Linear(
             channels,
-            group * kernel_size[0] * kernel_size[1])
+            group * kernel_size[0] * kernel_size[1] * 2)
         self.mask = nn.Linear(
             channels,
             group * kernel_size[0] * kernel_size[1])
